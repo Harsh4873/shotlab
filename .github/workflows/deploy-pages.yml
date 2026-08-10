@@ -1,0 +1,78 @@
+name: Deploy ShotLab to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test metrics
+        run: npm test
+
+      - name: Build static site
+        run: npm run build:pages
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Validate Pages artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f out/index.html
+          test -f out/manifest.webmanifest
+          test -f out/sw.js
+          test -f out/models/pose_landmarker_lite.task
+          test -f out/mediapipe/wasm/vision_wasm_internal.wasm
+          test -f out/icons/icon-192.png
+          find out/_next/static/chunks -type f -name 'shotlab-pose*.js' -print -quit | grep -q .
+          grep -Fq '/shotlab/_next/' out/index.html
+          grep -Fq '<link rel="canonical" href="https://harsh.bet/shotlab/"' out/index.html
+          grep -Fq '"start_url": "./"' out/manifest.webmanifest
+          test ! -e CNAME
+          test ! -e out/CNAME
+          touch out/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: out
+
+      - name: Deploy Pages artifact
+        id: deployment
+        uses: actions/deploy-pages@v4

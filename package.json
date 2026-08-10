@@ -4,13 +4,15 @@
   "private": true,
   "description": "Phone-first basketball form analysis with on-device pose metrics and optional Firebase sync.",
   "license": "MIT",
-  "repository": "https://github.com/Harsh4873/ShotLab",
+  "repository": "https://github.com/Harsh4873/shotlab",
+  "homepage": "https://harsh.bet/shotlab/",
   "engines": {
     "node": ">=22.13.0"
   },
   "scripts": {
     "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev",
     "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
+    "build:pages": "GITHUB_PAGES=true next build --webpack",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
     "test": "vitest run --config tests/vitest.config.ts",
     "typecheck": "tsc --noEmit",
@@ -21,6 +23,7 @@
     "firebase": "12.17.1",
     "idb": "8.0.3",
     "lucide-react": "1.31.0",
+    "next": "16.2.6",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },

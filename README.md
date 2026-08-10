@@ -2,6 +2,8 @@
 
 ShotLab is a phone-first basketball form lab. It runs MediaPipe Pose Landmarker in the browser, turns 33 body landmarks into repeatable movement metrics, and builds a personal make-versus-miss baseline over time.
 
+Live app: [https://harsh.bet/shotlab/](https://harsh.bet/shotlab/)
+
 The app is deliberately local-first: pose inference and metric calculation happen on the device. Firebase is an optional sync layer for shot summaries and, when Cloud Storage is enabled, original clips.
 
 ## What the MVP does
@@ -38,7 +40,7 @@ For best results, place the phone in landscape at roughly chest height, use a si
 - IndexedDB via `idb`
 - Firebase Authentication, Firestore, and optional Cloud Storage
 - Vitest for deterministic geometry and phase tests
-- Cloudflare-compatible Sites deployment
+- Static GitHub Pages deployment at `harsh.bet/shotlab/`
 
 ## Local development
 
@@ -58,7 +60,10 @@ npm run typecheck
 npm run lint
 npm test
 npm run build
+npm run build:pages
 ```
+
+Pushing `main` runs the GitHub Pages workflow. The project intentionally has no `CNAME`; the `harsh.bet` apex repository supplies the shared custom domain and GitHub serves this app at `/shotlab/`.
 
 ## Firebase
 

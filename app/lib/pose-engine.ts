@@ -171,7 +171,7 @@ async function bitmapFromVideo(
 }
 
 function assetUrl(path: string) {
-  return new URL(path.replace(/^\//, ""), `${window.location.origin}/`).href;
+  return new URL(path.replace(/^\//, ""), document.baseURI).href;
 }
 
 export async function analyzeVideoElement(

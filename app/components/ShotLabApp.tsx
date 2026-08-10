@@ -576,7 +576,7 @@ function AnalyzeScreen({
         <>
           <section className="video-stage">
             <video ref={videoRef} src={videoUrl} controls playsInline preload="metadata">
-              <track kind="captions" src="/empty.vtt" srcLang="en" label="No dialogue" default />
+              <track kind="captions" src="empty.vtt" srcLang="en" label="No dialogue" default />
             </video>
             {settings.showPoseOverlay && analysis ? (
               <PoseOverlay frame={frames[releaseFrameIndex]} activeSide={analysis.metrics.dominantSide === "left" ? "left" : "right"} />
@@ -838,7 +838,8 @@ export function ShotLabApp() {
       });
     }, 0);
     if ("serviceWorker" in navigator) {
-      void navigator.serviceWorker.register("/sw.js").catch(() => {});
+      const serviceWorkerUrl = new URL("sw.js", document.baseURI);
+      void navigator.serviceWorker.register(serviceWorkerUrl).catch(() => {});
     }
     const handleInstallPrompt = (event: Event) => {
       event.preventDefault();

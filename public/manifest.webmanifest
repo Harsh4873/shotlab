@@ -1,0 +1,26 @@
+{
+  "name": "ShotLab — Basketball Form Lab",
+  "short_name": "ShotLab",
+  "description": "On-device basketball shot form analysis and personal make/miss comparisons.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b0e11",
+  "theme_color": "#0b0e11",
+  "categories": ["sports", "fitness", "utilities"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function validShot(data, userId, shotId) {
+      return data.keys().hasAll([
+          'schemaVersion',
+          'id',
+          'ownerId',
+          'createdAt',
+          'updatedAt',
+          'recordedAt',
+          'status',
+          'result',
+          'metrics',
+          'remoteUpdatedAt'
+        ])
+        && data.keys().hasOnly([
+          'schemaVersion',
+          'id',
+          'ownerId',
+          'createdAt',
+          'updatedAt',
+          'recordedAt',
+          'status',
+          'result',
+          'metrics',
+          'poseSummary',
+          'capture',
+          'video',
+          'notes',
+          'tags',
+          'analysisError',
+          'remoteUpdatedAt'
+        ])
+        && data.schemaVersion == 1
+        && data.id == shotId
+        && data.ownerId == userId
+        && data.createdAt is string
+        && data.updatedAt is string
+        && data.recordedAt is string
+        && data.status in ['draft', 'analyzing', 'ready', 'failed']
+        && data.result in ['made', 'missed', 'unknown']
+        && data.metrics is map
+        && data.get('poseSummary', {}) is map
+        && data.get('capture', {}) is map
+        && data.get('video', {}) is map
+        && data.get('notes', '') is string
+        && data.get('notes', '').size() <= 4000
+        && data.get('tags', []) is list
+        && data.get('tags', []).size() <= 30
+        && data.get('analysisError', '') is string
+        && data.remoteUpdatedAt is timestamp;
+    }
+
+    match /users/{userId}/shots/{shotId} {
+      allow get, list: if isOwner(userId);
+
+      allow create: if isOwner(userId)
+        && validShot(request.resource.data, userId, shotId);
+
+      allow update: if isOwner(userId)
+        && resource.data.ownerId == userId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && validShot(request.resource.data, userId, shotId);
+
+      allow delete: if isOwner(userId) && resource.data.ownerId == userId;
+    }
+  }
+}

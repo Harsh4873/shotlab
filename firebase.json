@@ -9,8 +9,7 @@
     "providers": {
       "anonymous": true,
       "googleSignIn": {
-        "oAuthBrandDisplayName": "ShotLab",
-        "supportEmail": "hdav4873@gmail.com"
+        "oAuthBrandDisplayName": "ShotLab"
       }
     }
   }

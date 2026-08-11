@@ -73,6 +73,11 @@ The default project is declared in `.firebaserc`. Firestore and Authentication a
 firebase deploy --only auth,firestore:rules
 ```
 
+The OAuth brand's support email is deliberately not committed — it is a personal address, and this
+repository is public. It is set once in the Google Cloud console under APIs & Services → OAuth
+consent screen, which is the value the consent screen actually shows. `firebase deploy --only auth`
+therefore leaves the existing support email in place rather than declaring it here.
+
 Cloud Storage for Firebase requires the Blaze pay-as-you-go plan for new/default buckets. Shot summaries still sync through Firestore without raw-video storage. After enabling a bucket, deploy the owner-only video rules:
 
 ```bash

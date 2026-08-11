@@ -73,6 +73,7 @@ import {
   type ShotResult,
 } from "../lib/types";
 import { PoseOverlay } from "./PoseOverlay";
+import { ThemeToggle } from "./ThemeToggle";
 
 type Screen = "home" | "analyze" | "history" | "settings";
 type AnalyzePhase = "pick" | "ready" | "running" | "result";
@@ -1225,14 +1226,20 @@ export function ShotLabApp() {
         </nav>
         <div className="sidebar-bottom">
           <div className="local-ai-note"><ShieldCheck size={17} /><span><b>On-device vision</b><small>Pose frames stay private.</small></span></div>
-          <StatusPill user={user} />
+          <div className="sidebar-status-row">
+            <StatusPill user={user} />
+            <ThemeToggle />
+          </div>
         </div>
       </aside>
 
       <div className="app-main">
         <header className="mobile-header">
           <Brand />
-          <StatusPill user={user} compact />
+          <div className="mobile-header-actions">
+            <StatusPill user={user} compact />
+            <ThemeToggle compact />
+          </div>
         </header>
         <main>{screenNode}</main>
       </div>

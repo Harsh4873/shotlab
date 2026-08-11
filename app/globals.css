@@ -1,6 +1,27 @@
 @import "tailwindcss";
 
+/*
+ * Theme tokens.
+ *
+ * `:root` carries the dark palette, which is also the fallback when no theme has
+ * been resolved yet. `:root[data-theme="light"]` re-points the same tokens at the
+ * light palette; the theme attribute is stamped on <html> before first paint by
+ * the resolver inlined in app/layout.tsx.
+ *
+ * Two token families do the heavy lifting for theming:
+ *   --tint-rgb   surface washes, consumed as rgb(var(--tint-rgb) / <alpha>). Light
+ *                on dark, dark on light, so the same alpha reads correctly in both.
+ *   --*-ink      accent colours used as TEXT. The plain --orange/--lime/--blue/
+ *                --red/--green stay put for fills and borders; the -ink variants
+ *                darken in light mode so accent text keeps its contrast on white.
+ *
+ * Deliberately theme-independent: the orange hero card, the brand ball, and the
+ * video stage. Those are media/brand surfaces that stay dark-on-vivid in both
+ * themes, so the colours painted on top of them are intentionally hardcoded.
+ */
 :root {
+  color-scheme: dark;
+
   --ink: #0b0e11;
   --ink-soft: #11161a;
   --panel: #171c20;
@@ -8,14 +29,61 @@
   --line: rgba(235, 244, 239, 0.11);
   --line-strong: rgba(235, 244, 239, 0.2);
   --paper: #edf3ef;
+  --paper-2: #c7d0ca;
+  --paper-4: #5f6a64;
   --muted: #94a099;
+  --tint-rgb: 255 255 255;
+
   --orange: #ff6b21;
   --orange-hot: #ff7b36;
   --lime: #c9f760;
   --blue: #72b7ff;
   --red: #ff6b62;
   --green: #86dc74;
+
+  --orange-ink: #ff7b36;
+  --lime-ink: #c9f760;
+  --blue-ink: #72b7ff;
+  --red-ink: #ff6b62;
+  --green-ink: #86dc74;
+  --error-ink: #ff9b95;
+
+  --chrome: rgba(8, 11, 13, 0.96);
+  --chrome-veil: rgba(8, 11, 13, 0.92);
+  --switch-track: #343c37;
+  --switch-knob: #aeb8b2;
+
   --shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --ink: #eef1ee;
+  --ink-soft: #f6f8f6;
+  --panel: #ffffff;
+  --panel-raised: #f1f4f1;
+  --line: rgba(17, 28, 22, 0.13);
+  --line-strong: rgba(17, 28, 22, 0.24);
+  --paper: #151b18;
+  --paper-2: #3d4a44;
+  --paper-4: #78847d;
+  --muted: #616c65;
+  --tint-rgb: 17 28 22;
+
+  --orange-ink: #b8480d;
+  --lime-ink: #526d18;
+  --blue-ink: #1a5fb4;
+  --red-ink: #b3261e;
+  --green-ink: #2c7a3f;
+  --error-ink: #b3261e;
+
+  --chrome: rgba(255, 255, 255, 0.95);
+  --chrome-veil: rgba(250, 252, 250, 0.9);
+  --switch-track: #ccd4cf;
+  --switch-knob: #ffffff;
+
+  --shadow: 0 18px 46px rgba(20, 35, 27, 0.1);
 }
 
 * {
@@ -86,7 +154,7 @@ button:disabled {
   flex: 0 0 244px;
   flex-direction: column;
   border-right: 1px solid var(--line);
-  background: rgba(8, 11, 13, 0.96);
+  background: var(--chrome);
   padding: 28px 22px 22px;
 }
 
@@ -107,7 +175,7 @@ button:disabled {
 }
 
 .brand-word span {
-  color: var(--orange);
+  color: var(--orange-ink);
 }
 
 .brand-ball {
@@ -201,13 +269,13 @@ button:disabled {
 }
 
 .desktop-sidebar nav button:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: rgb(var(--tint-rgb) / 0.04);
   color: var(--paper);
 }
 
 .desktop-sidebar nav button.active {
   background: rgba(255, 107, 33, 0.12);
-  color: var(--orange-hot);
+  color: var(--orange-ink);
 }
 
 .desktop-sidebar nav button.active::before {
@@ -232,8 +300,8 @@ button:disabled {
   gap: 10px;
   border: 1px solid var(--line);
   border-radius: 13px;
-  background: rgba(255, 255, 255, 0.025);
-  color: var(--orange);
+  background: rgb(var(--tint-rgb) / 0.025);
+  color: var(--orange-ink);
   padding: 12px;
 }
 
@@ -267,7 +335,45 @@ button:disabled {
 
 .status-pill.is-online {
   border-color: rgba(134, 220, 116, 0.25);
-  color: var(--green);
+  color: var(--green-ink);
+}
+
+.sidebar-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mobile-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  cursor: pointer;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgb(var(--tint-rgb) / 0.04);
+  color: var(--muted);
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+}
+
+.theme-toggle:hover {
+  border-color: var(--line-strong);
+  color: var(--paper);
+}
+
+.theme-toggle.compact {
+  border-radius: 50%;
+  padding: 8px;
 }
 
 .app-main {
@@ -294,7 +400,7 @@ button:disabled {
 
 .eyebrow {
   margin: 0 0 7px;
-  color: var(--orange);
+  color: var(--orange-ink);
   font-size: 10px;
   font-weight: 850;
   letter-spacing: 0.18em;
@@ -341,7 +447,7 @@ button:disabled {
 .secondary-button {
   min-height: 43px;
   border: 1px solid var(--line-strong);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgb(var(--tint-rgb) / 0.04);
   color: var(--paper);
   padding: 0 15px;
   font-size: 13px;
@@ -368,7 +474,7 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: 18px;
   background: var(--panel);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset;
+  box-shadow: 0 1px 0 rgb(var(--tint-rgb) / 0.02) inset;
 }
 
 .hero-card {
@@ -387,13 +493,24 @@ button:disabled {
   padding: 50px 48px;
 }
 
+/*
+ * Decorative court circle. Its height is fixed rather than derived from the
+ * hero's height, because the rotation adds height*sin(angle) to the element's
+ * horizontal bounding box; a percentage inset let that term grow with the hero
+ * and push the rect past the right edge of the viewport. Fixed height plus a
+ * positive right inset keeps the rect inside the viewport at every width.
+ */
 .hero-court-lines {
   position: absolute;
-  inset: -15% -8% -15% 45%;
+  top: 50%;
+  right: 4%;
+  bottom: auto;
+  left: 46%;
+  height: 380px;
   opacity: 0.3;
   border: 2px solid rgba(255, 255, 255, 0.45);
   border-radius: 50%;
-  transform: rotate(-14deg);
+  transform: translateY(-50%) rotate(-10deg);
 }
 
 .hero-court-lines::before {
@@ -564,17 +681,17 @@ button:disabled {
 
 .pulse-icon.orange {
   background: rgba(255, 107, 33, 0.13);
-  color: var(--orange);
+  color: var(--orange-ink);
 }
 
 .pulse-icon.lime {
   background: rgba(201, 247, 96, 0.12);
-  color: var(--lime);
+  color: var(--lime-ink);
 }
 
 .pulse-icon.blue {
   background: rgba(114, 183, 255, 0.12);
-  color: var(--blue);
+  color: var(--blue-ink);
 }
 
 .pulse-card > div:last-child {
@@ -667,7 +784,7 @@ button:disabled {
   flex: 0 0 112px;
   overflow: hidden;
   border-radius: 13px;
-  background: rgba(255, 255, 255, 0.035);
+  background: rgb(var(--tint-rgb) / 0.035);
 }
 
 .phone-shape {
@@ -742,12 +859,12 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 7px;
-  color: #c7d0ca;
+  color: var(--paper-2);
   font-size: 11px;
 }
 
 .check-list svg {
-  color: var(--lime);
+  color: var(--lime-ink);
 }
 
 .recent-list {
@@ -782,7 +899,7 @@ button:disabled {
   align-items: center;
   gap: 5px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgb(var(--tint-rgb) / 0.06);
   color: var(--muted);
   padding: 5px 8px;
   font-size: 10px;
@@ -792,12 +909,12 @@ button:disabled {
 
 .result-badge.made {
   background: rgba(134, 220, 116, 0.1);
-  color: var(--green);
+  color: var(--green-ink);
 }
 
 .result-badge.missed {
   background: rgba(255, 107, 98, 0.1);
-  color: var(--red);
+  color: var(--red-ink);
 }
 
 .recent-shot-time {
@@ -829,7 +946,7 @@ button:disabled {
   gap: 16px;
   border: 1px dashed var(--line-strong);
   border-radius: 17px;
-  background: rgba(255, 255, 255, 0.018);
+  background: rgb(var(--tint-rgb) / 0.018);
   padding: 22px;
 }
 
@@ -845,7 +962,7 @@ button:disabled {
   place-items: center;
   border-radius: 14px;
   background: rgba(255, 107, 33, 0.1);
-  color: var(--orange);
+  color: var(--orange-ink);
 }
 
 .empty-state.stacked {
@@ -866,7 +983,7 @@ button:disabled {
   border-radius: 22px;
   background:
     radial-gradient(circle at 50% 50%, rgba(255, 107, 33, 0.09), transparent 18rem),
-    rgba(255, 255, 255, 0.015);
+    rgb(var(--tint-rgb) / 0.015);
   padding: 40px 20px;
   text-align: center;
 }
@@ -888,7 +1005,7 @@ button:disabled {
   border: 1px solid rgba(255, 107, 33, 0.3);
   border-radius: 50%;
   background: rgba(255, 107, 33, 0.1);
-  color: var(--orange);
+  color: var(--orange-ink);
   box-shadow: 0 0 0 12px rgba(255, 107, 33, 0.035);
 }
 
@@ -947,7 +1064,7 @@ button:disabled {
 }
 
 .capture-guide li > span {
-  color: var(--orange);
+  color: var(--orange-ink);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
 }
@@ -1038,7 +1155,7 @@ button:disabled {
   place-items: center;
   border-radius: 12px;
   background: rgba(201, 247, 96, 0.11);
-  color: var(--lime);
+  color: var(--lime-ink);
 }
 
 .analysis-progress {
@@ -1062,7 +1179,7 @@ button:disabled {
 }
 
 .progress-top strong {
-  color: var(--orange);
+  color: var(--orange-ink);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
@@ -1075,7 +1192,7 @@ button:disabled {
   overflow: hidden;
   margin: 16px 0 10px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.07);
+  background: rgb(var(--tint-rgb) / 0.07);
 }
 
 .progress-track i {
@@ -1100,7 +1217,7 @@ button:disabled {
   border: 1px solid rgba(255, 107, 98, 0.25);
   border-radius: 12px;
   background: rgba(255, 107, 98, 0.08);
-  color: #ff9b95;
+  color: var(--error-ink);
   padding: 12px 14px;
   font-size: 12px;
   line-height: 1.5;
@@ -1139,8 +1256,8 @@ button:disabled {
   flex: 0 0 110px;
   place-content: center;
   border: 8px solid rgba(255, 107, 33, 0.12);
-  border-top-color: var(--orange);
-  border-right-color: var(--orange);
+  border-top-color: var(--orange-ink);
+  border-right-color: var(--orange-ink);
   border-radius: 50%;
   text-align: center;
   transform: rotate(-20deg);
@@ -1182,7 +1299,7 @@ button:disabled {
 }
 
 .release-control-head b {
-  color: var(--orange);
+  color: var(--orange-ink);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
 }
@@ -1190,7 +1307,7 @@ button:disabled {
 .release-control input,
 .range-row input {
   width: 100%;
-  accent-color: var(--orange);
+  accent-color: var(--orange-ink);
 }
 
 .release-control input {
@@ -1242,7 +1359,7 @@ button:disabled {
 }
 
 .empty-metric {
-  color: #59635d !important;
+  color: var(--paper-4) !important;
 }
 
 .comparison-card {
@@ -1266,7 +1383,7 @@ button:disabled {
 
 .comparison-row.header {
   border-top: 0;
-  color: #69746d;
+  color: var(--paper-4);
   font-size: 8px;
   font-weight: 800;
   text-transform: uppercase;
@@ -1293,14 +1410,14 @@ button:disabled {
   border: 1px solid rgba(114, 183, 255, 0.16);
   border-radius: 13px;
   background: rgba(114, 183, 255, 0.06);
-  color: var(--blue);
+  color: var(--blue-ink);
   padding: 14px;
 }
 
 .accuracy-note p,
 .privacy-card p {
   margin: 0;
-  color: #aab7b1;
+  color: var(--paper-2);
   font-size: 10px;
   line-height: 1.55;
 }
@@ -1338,7 +1455,7 @@ button:disabled {
   gap: 6px;
   border: 1px solid var(--line);
   border-radius: 11px;
-  background: rgba(255, 255, 255, 0.025);
+  background: rgb(var(--tint-rgb) / 0.025);
   color: var(--muted);
   font-size: 11px;
   font-weight: 750;
@@ -1346,20 +1463,20 @@ button:disabled {
 
 .outcome-picker button.selected {
   border-color: var(--line-strong);
-  background: rgba(255, 255, 255, 0.08);
+  background: rgb(var(--tint-rgb) / 0.08);
   color: var(--paper);
 }
 
 .outcome-picker button.selected.made {
   border-color: rgba(134, 220, 116, 0.32);
   background: rgba(134, 220, 116, 0.1);
-  color: var(--green);
+  color: var(--green-ink);
 }
 
 .outcome-picker button.selected.missed {
   border-color: rgba(255, 107, 98, 0.32);
   background: rgba(255, 107, 98, 0.1);
-  color: var(--red);
+  color: var(--red-ink);
 }
 
 .notes-field {
@@ -1382,13 +1499,13 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: 11px;
   outline: 0;
-  background: rgba(255, 255, 255, 0.035);
+  background: rgb(var(--tint-rgb) / 0.035);
   padding: 13px 14px;
   font-size: 12px;
 }
 
 .notes-field input:focus {
-  border-color: var(--orange);
+  border-color: var(--orange-ink);
 }
 
 .history-insight {
@@ -1443,7 +1560,7 @@ button:disabled {
 }
 
 .shot-number {
-  color: #59635d;
+  color: var(--paper-4);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
 }
@@ -1498,13 +1615,13 @@ button:disabled {
 }
 
 .icon-button.danger {
-  color: var(--red);
+  color: var(--red-ink);
 }
 
 .shot-note {
   margin: 20px 0 0;
   border-left: 2px solid var(--orange);
-  color: #c3ccc6;
+  color: var(--paper-2);
   padding: 8px 16px;
   font-size: 13px;
 }
@@ -1565,7 +1682,7 @@ button:disabled {
   place-items: center;
   border-radius: 14px;
   background: rgba(114, 183, 255, 0.11);
-  color: var(--blue);
+  color: var(--blue-ink);
 }
 
 .settings-group {
@@ -1577,7 +1694,7 @@ button:disabled {
   align-items: flex-start;
   gap: 11px;
   border-bottom: 1px solid var(--line);
-  color: var(--orange);
+  color: var(--orange-ink);
   padding-bottom: 17px;
 }
 
@@ -1627,7 +1744,7 @@ button:disabled {
   flex: 0 0 43px;
   cursor: pointer;
   border-radius: 999px;
-  background: #343c37;
+  background: var(--switch-track);
   transition: background 160ms ease;
 }
 
@@ -1638,7 +1755,7 @@ button:disabled {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: #aeb8b2;
+  background: var(--switch-knob);
   transition: transform 160ms ease, background 160ms ease;
 }
 
@@ -1671,7 +1788,7 @@ button:disabled {
 }
 
 .range-row > strong {
-  color: var(--orange);
+  color: var(--orange-ink);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
 }
@@ -1702,7 +1819,7 @@ button:disabled {
   border-radius: 13px;
   background: #222a25;
   box-shadow: 0 20px 55px rgba(0, 0, 0, 0.45);
-  color: var(--paper);
+  color: #edf3ef;
   padding: 13px 15px;
   font-size: 11px;
   line-height: 1.45;
@@ -1772,7 +1889,7 @@ button:disabled {
     align-items: center;
     justify-content: space-between;
     border-bottom: 1px solid var(--line);
-    background: rgba(8, 11, 13, 0.9);
+    background: var(--chrome-veil);
     padding: max(13px, env(safe-area-inset-top)) 18px 12px;
     backdrop-filter: blur(14px);
   }
@@ -1796,7 +1913,7 @@ button:disabled {
     min-height: calc(65px + env(safe-area-inset-bottom));
     grid-template-columns: repeat(4, 1fr);
     border-top: 1px solid var(--line);
-    background: rgba(8, 11, 13, 0.94);
+    background: var(--chrome-veil);
     padding: 7px 7px env(safe-area-inset-bottom);
     backdrop-filter: blur(17px);
   }
@@ -1810,13 +1927,13 @@ button:disabled {
     gap: 4px;
     border: 0;
     background: transparent;
-    color: #727d76;
+    color: var(--muted);
     font-size: 9px;
     font-weight: 700;
   }
 
   .mobile-nav button.active {
-    color: var(--orange);
+    color: var(--orange-ink);
   }
 
   .screen-content {
@@ -1870,14 +1987,37 @@ button:disabled {
     font-size: 13px;
   }
 
+  /*
+   * Narrow-screen hero decoration must stay inside the viewport.
+   *
+   * Both of these are rotated, so their layout box is not their painted box: a
+   * rotated element's bounding rect grows by height*sin(angle) horizontally.
+   * Previously .hero-release-card sat at right:-18px and .hero-court-lines at
+   * right:-8% with a 14deg tilt over a full-bleed height, which pushed their
+   * rects to ~397px and ~476px against a 390px viewport. The card's
+   * overflow:hidden clipped the paint, but the geometry still escaped.
+   *
+   * So: keep both inside the hero's padding box, and give .hero-court-lines a
+   * fixed height instead of a percentage inset, so the rotation's horizontal
+   * contribution is bounded rather than growing with the hero.
+   */
   .hero-release-card {
     position: absolute;
-    right: -18px;
-    bottom: -48px;
+    right: 6px;
+    bottom: -40px;
     width: 192px;
     height: 220px;
     opacity: 0.72;
     transform: rotate(-4deg);
+  }
+
+  .hero-court-lines {
+    top: 50%;
+    right: 4%;
+    bottom: auto;
+    left: 44%;
+    height: 300px;
+    transform: translateY(-50%) rotate(-8deg);
   }
 
   .hero-release-card > strong {
@@ -2092,4 +2232,39 @@ button:disabled {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/*
+ * Light-theme refinements.
+ *
+ * Most accent washes are alpha tints, so they read correctly over either
+ * backdrop and need no override. These few were tuned against a near-black
+ * page and disappear on white, so they get a stronger mix in light mode only.
+ */
+:root[data-theme="light"] .accuracy-note,
+:root[data-theme="light"] .privacy-card {
+  border-color: rgba(26, 95, 180, 0.28);
+  background: rgba(26, 95, 180, 0.07);
+}
+
+:root[data-theme="light"] .status-pill.is-online {
+  border-color: rgba(44, 122, 63, 0.4);
+}
+
+:root[data-theme="light"] .dropzone-orbit {
+  border-color: rgba(184, 72, 13, 0.35);
+  box-shadow: 0 0 0 12px rgba(255, 107, 33, 0.07);
+}
+
+:root[data-theme="light"] .video-dropzone {
+  border-color: rgba(184, 72, 13, 0.45);
+}
+
+:root[data-theme="light"] .confidence-ring {
+  border-color: rgba(255, 107, 33, 0.2);
+}
+
+/* An inset white highlight only makes sense over a dark fill. */
+:root[data-theme="light"] .card-panel {
+  box-shadow: none;
 }

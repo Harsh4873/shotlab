@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 
+import { THEME_INIT_SCRIPT } from "./lib/theme";
 import "./globals.css";
 
 const siteUrl = new URL("https://harsh.bet/shotlab/");
@@ -50,13 +51,21 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   viewportFit: "cover",
-  themeColor: "#0b0e11",
-  colorScheme: "dark",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#eef1ee" },
+    { media: "(prefers-color-scheme: dark)", color: "#0b0e11" },
+  ],
+  colorScheme: "light dark",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
+    // data-theme is rewritten by the inline resolver below before the first
+    // paint, so the server-rendered default will not match on light setups.
+    <html lang="en" data-theme="dark" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
       <body>{children}</body>
     </html>
   );

@@ -59,6 +59,7 @@ import {
   cloudVideoStore,
   firebaseAuth,
 } from "../lib/firebase";
+import { flushShotDeletions } from "../lib/shot-sync";
 import { analyzeVideoElement } from "../lib/pose-engine";
 import {
   DEFAULT_SHOTLAB_SETTINGS,
@@ -823,6 +824,18 @@ export function ShotLabApp() {
   const analysisAbortRef = useRef<AbortController | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
+  const deletionRetryRef = useRef(new Map<string, Promise<void>>());
+  const retryCloudDeletions = useCallback((ownerId: string) => {
+    const existing = deletionRetryRef.current.get(ownerId);
+    if (existing) return existing;
+    const pending = flushShotDeletions(ownerId);
+    deletionRetryRef.current.set(ownerId, pending);
+    void pending.finally(() => {
+      if (deletionRetryRef.current.get(ownerId) === pending) deletionRetryRef.current.delete(ownerId);
+    }).catch(() => {});
+    return pending;
+  }, []);
+
   const refreshLocal = useCallback(async () => {
     const [localShots, localSettings] = await Promise.all([
       localShotStore.list(),
@@ -854,46 +867,57 @@ export function ShotLabApp() {
   }, [refreshLocal]);
 
   useEffect(() => {
-    let unsubscribe: (() => void) | undefined;
+    let authUnsubscribe: (() => void) | undefined;
+    let cloudUnsubscribe: (() => void) | undefined;
     let canceled = false;
+    let activeOwner: string | undefined;
+    let generation = 0;
+    const warnSync = () => setNotice({ tone: "warning", text: "Cloud sync is temporarily unavailable. Reconnect to retry pending deletions." });
+    const retry = () => {
+      if (activeOwner) void retryCloudDeletions(activeOwner).catch(warnSync);
+    };
+    window.addEventListener("online", retry);
     void firebaseAuth.observe(
       (nextUser) => {
         if (canceled) return;
+        const currentGeneration = ++generation;
+        cloudUnsubscribe?.();
+        cloudUnsubscribe = undefined;
+        activeOwner = nextUser?.uid;
         setUser(nextUser);
         if (!nextUser) return;
-        void cloudShotStore
-          .subscribe(
-            (snapshot) => {
-              if (canceled) return;
-              void localShotStore.saveMany(snapshot.shots).then(() => {
-                setShots((current) => mergeShots(current, snapshot.shots));
-              });
-            },
-            { onError: () => setNotice({ tone: "warning", text: "Cloud sync is temporarily unavailable. Your shots are safe on this device." }) },
-          )
-          .then((stop) => {
-            if (canceled) stop();
-            else unsubscribe = stop;
-          })
-          .catch(() => {});
+        retry();
+        let reconciliation = Promise.resolve();
+        void cloudShotStore.subscribe(
+          (snapshot) => {
+            reconciliation = reconciliation.then(async () => {
+              if (canceled || currentGeneration !== generation) return;
+              const reconciled = await localShotStore.reconcileCloud(nextUser.uid, snapshot);
+              if (canceled || currentGeneration !== generation) return;
+              setShots(reconciled);
+              setSelectedHistoryShot((current) => current ? reconciled.find((shot) => shot.id === current.id) ?? null : null);
+              retry();
+            }).catch(warnSync);
+          },
+          { onError: warnSync },
+        ).then((stop) => {
+          if (canceled || currentGeneration !== generation) stop();
+          else cloudUnsubscribe = stop;
+        }).catch(warnSync);
       },
       () => {},
     ).then((stop) => {
       if (canceled) stop();
-      else {
-        const authUnsubscribe = stop;
-        const cloudUnsubscribe = unsubscribe;
-        unsubscribe = () => {
-          authUnsubscribe();
-          cloudUnsubscribe?.();
-        };
-      }
-    });
+      else authUnsubscribe = stop;
+    }).catch(() => {});
     return () => {
       canceled = true;
-      unsubscribe?.();
+      generation += 1;
+      authUnsubscribe?.();
+      cloudUnsubscribe?.();
+      window.removeEventListener("online", retry);
     };
-  }, []);
+  }, [retryCloudDeletions]);
 
   useEffect(() => {
     if (!notice) return;
@@ -1136,13 +1160,16 @@ export function ShotLabApp() {
 
   const deleteHistoryShot = async (shot: ShotRecord) => {
     await localShotStore.delete(shot.id);
-    if (user && shot.ownerId === user.uid) {
-      void cloudShotStore.delete(shot.id).catch(() => {});
-      if (shot.video?.storagePath) void cloudVideoStore.delete(shot.video.storagePath).catch(() => {});
-    }
     setShots((current) => current.filter((item) => item.id !== shot.id));
     setSelectedHistoryShot(null);
     setNotice({ tone: "success", text: "Shot removed from your history." });
+    if (user && shot.ownerId === user.uid) {
+      try {
+        await retryCloudDeletions(user.uid);
+      } catch {
+        setNotice({ tone: "warning", text: "Shot removed on this device. Cloud deletion will retry when you reconnect." });
+      }
+    }
   };
 
   const install = async () => {

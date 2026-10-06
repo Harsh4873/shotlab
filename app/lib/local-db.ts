@@ -11,7 +11,7 @@ import {
 } from "./types";
 
 const DATABASE_NAME = "shotlab";
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 const SETTINGS_KEY = "app" as const;
 
 interface StoredSettings {
@@ -19,7 +19,18 @@ interface StoredSettings {
   value: ShotLabSettings;
 }
 
+export interface ShotDeletion {
+  id: string;
+  ownerId: string;
+  storagePath?: string;
+  pending: boolean;
+}
+
 interface ShotLabDatabase extends DBSchema {
+  deletions: {
+    key: string;
+    value: ShotDeletion;
+  };
   shots: {
     key: string;
     value: ShotRecord;
@@ -112,6 +123,9 @@ async function openLocalDatabase(): Promise<IDBPDatabase<ShotLabDatabase>> {
 
   return openDB<ShotLabDatabase>(DATABASE_NAME, DATABASE_VERSION, {
     upgrade(database) {
+      if (!database.objectStoreNames.contains("deletions")) {
+        database.createObjectStore("deletions", { keyPath: "id" });
+      }
       if (!database.objectStoreNames.contains("shots")) {
         const shots = database.createObjectStore("shots", { keyPath: "id" });
         shots.createIndex("by-owner", "ownerId");
@@ -164,20 +178,89 @@ export async function saveShot(shot: ShotRecord): Promise<ShotRecord> {
   assertNonEmpty(shot.ownerId, "shot.ownerId");
 
   const database = await getLocalDatabase();
-  await database.put("shots", shot);
+  const transaction = database.transaction(["shots", "deletions"], "readwrite");
+  if (await transaction.objectStore("deletions").get(shot.id)) {
+    await transaction.done;
+    throw new Error("This shot was deleted from history.");
+  }
+  await transaction.objectStore("shots").put(shot);
+  await transaction.done;
   return shot;
 }
 
 export async function saveShots(shots: readonly ShotRecord[]): Promise<void> {
   const database = await getLocalDatabase();
-  const transaction = database.transaction("shots", "readwrite");
+  const transaction = database.transaction(["shots", "deletions"], "readwrite");
 
   for (const shot of shots) {
     assertNonEmpty(shot.id, "shot.id");
     assertNonEmpty(shot.ownerId, "shot.ownerId");
-    await transaction.store.put(shot);
+    if (!await transaction.objectStore("deletions").get(shot.id)) {
+      await transaction.objectStore("shots").put(shot);
+    }
   }
 
+  await transaction.done;
+}
+
+/** Apply a complete cloud query without losing device assets or unsynced work. */
+export async function reconcileCloudShots(
+  ownerId: string,
+  snapshot: { shots: readonly ShotRecord[]; fromCache: boolean; hasPendingWrites: boolean },
+): Promise<ShotRecord[]> {
+  const database = await getLocalDatabase();
+  const transaction = database.transaction(["shots", "videos", "deletions"], "readwrite");
+  const shotStore = transaction.objectStore("shots");
+  const deletionStore = transaction.objectStore("deletions");
+  const remoteIds = new Set(snapshot.shots.map((shot) => shot.id));
+  const localShots = await shotStore.index("by-owner").getAll(ownerId);
+
+  // Cached and pending snapshots are not authoritative evidence of a deletion.
+  if (!snapshot.fromCache && !snapshot.hasPendingWrites) {
+    for (const deletion of await deletionStore.getAll()) {
+      if (deletion.ownerId === ownerId && deletion.pending && !remoteIds.has(deletion.id)) {
+        await deletionStore.put({ ...deletion, pending: false });
+      }
+    }
+    for (const shot of localShots) {
+      if (shot.sync.status !== "synced" || remoteIds.has(shot.id)) continue;
+      await shotStore.delete(shot.id);
+      await deletionStore.put({ id: shot.id, ownerId, pending: false });
+      const videoStore = transaction.objectStore("videos");
+      for (const key of await videoStore.index("by-shot").getAllKeys(shot.id)) {
+        await videoStore.delete(key);
+      }
+    }
+  }
+
+  for (const remote of snapshot.shots) {
+    if (remote.ownerId !== ownerId || await deletionStore.get(remote.id)) continue;
+    const local = await shotStore.get(remote.id);
+    if (local && (local.ownerId !== ownerId ||
+      local.updatedAt > remote.updatedAt)) continue;
+    const video = local?.video || remote.video ? {
+      ...local?.video,
+      ...remote.video,
+      localVideoId: local?.video?.localVideoId,
+    } : undefined;
+    await shotStore.put({ ...remote, poseFrames: local?.poseFrames, video });
+  }
+
+  const shots = await shotStore.getAll();
+  await transaction.done;
+  return shots.sort((left, right) => right.recordedAt.localeCompare(left.recordedAt));
+}
+
+export async function listPendingShotDeletions(ownerId: string): Promise<ShotDeletion[]> {
+  const database = await getLocalDatabase();
+  return (await database.getAll("deletions")).filter((item) => item.ownerId === ownerId && item.pending);
+}
+
+export async function acknowledgeShotDeletion(id: string): Promise<void> {
+  const database = await getLocalDatabase();
+  const transaction = database.transaction("deletions", "readwrite");
+  const deletion = await transaction.store.get(id);
+  if (deletion) await transaction.store.put({ ...deletion, pending: false });
   await transaction.done;
 }
 
@@ -265,12 +348,21 @@ export async function setShotSyncState(
 
 export async function deleteShot(
   shotId: string,
-  options: { deleteLocalVideos?: boolean } = {},
+  options: { deleteLocalVideos?: boolean; queueCloudDeletion?: boolean } = {},
 ): Promise<void> {
   const database = await getLocalDatabase();
-  const transaction = database.transaction(["shots", "videos"], "readwrite");
-
-  await transaction.objectStore("shots").delete(shotId);
+  const transaction = database.transaction(["shots", "videos", "deletions"], "readwrite");
+  const shotStore = transaction.objectStore("shots");
+  const shot = await shotStore.get(shotId);
+  if (shot) {
+    await transaction.objectStore("deletions").put({
+      id: shot.id,
+      ownerId: shot.ownerId,
+      storagePath: shot.video?.storagePath,
+      pending: options.queueCloudDeletion ?? shot.ownerId !== "local",
+    });
+  }
+  await shotStore.delete(shotId);
 
   if (options.deleteLocalVideos !== false) {
     const videoStore = transaction.objectStore("videos");
@@ -511,6 +603,7 @@ export async function reassignLocalOwner(
 export const localShotStore = {
   save: saveShot,
   saveMany: saveShots,
+  reconcileCloud: reconcileCloudShots,
   get: getShot,
   list: listShots,
   update: updateShot,

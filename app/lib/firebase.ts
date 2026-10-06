@@ -418,6 +418,10 @@ function cloudShotData(
     Record<string, unknown>;
   delete cloudShot.poseFrames;
   delete cloudShot.sync;
+  if (cloudShot.video) {
+    cloudShot.video = { ...cloudShot.video };
+    delete cloudShot.video.localVideoId;
+  }
   return {
     ...(removeUndefined(cloudShot) as Record<string, unknown>),
     remoteUpdatedAt,
@@ -476,9 +480,9 @@ export async function saveShotToCloud(shot: ShotRecord): Promise<ShotRecord> {
   };
 }
 
-export async function deleteShotFromCloud(shotId: string): Promise<void> {
+export async function deleteShotFromCloud(shotId: string, ownerId?: string): Promise<void> {
   const services = await getFirebaseServices();
-  const user = await requireUser(services);
+  const user = ownerId ? await requireOwner(services, ownerId) : await requireUser(services);
   const reference = services.firestoreApi.doc(
     services.db,
     "users",

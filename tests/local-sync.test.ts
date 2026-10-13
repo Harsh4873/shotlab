@@ -12,9 +12,10 @@ import {
   listPendingShotDeletions,
   reconcileCloudShots,
   saveShot,
+  shotsForViewer,
   storeVideoForShot,
 } from "../app/lib/local-db";
-import { flushShotDeletions } from "../app/lib/shot-sync";
+import { PendingUploadError, flushShotDeletions, flushPendingShotUploads } from "../app/lib/shot-sync";
 import type { ShotRecord } from "../app/lib/types";
 import { shotRecord, syntheticShotFrames } from "./helpers/shot-fixtures";
 
@@ -157,6 +158,111 @@ describe("cloud history reconciliation", () => {
     await flushShotDeletions(owner, removeShot);
     expect(removeShot.mock.calls).toEqual([["first", owner], ["second", owner]]);
     expect(await listPendingShotDeletions(owner)).toEqual([]);
+  });
+
+  it("keeps another account's rows stored while the viewer filter hides them", () => {
+    const local = { ...shotRecord("local", "unknown", {}), ownerId: "local" };
+    const mine = synced("mine");
+    const other = { ...synced("other"), ownerId: "another-user" };
+    expect(shotsForViewer([local, mine, other], "local").map((shot) => shot.id)).toEqual(["local"]);
+    expect(shotsForViewer([local, mine, other], owner).map((shot) => shot.id)).toEqual(["mine"]);
+  });
+
+  it("acknowledges a cloud deletion only after the stored video is removed", async () => {
+    const shot = { ...synced("clip-cloud"), video: { storagePath: "users/test-user/videos/clip.mp4" } };
+    await saveShot(shot);
+    await deleteShot(shot.id);
+    const order: string[] = [];
+    const removeShot = vi.fn(async () => {
+      order.push("doc");
+    });
+    const removeVideo = vi.fn(async () => {
+      order.push("video");
+    });
+    await flushShotDeletions(owner, removeShot, removeVideo);
+    expect(order).toEqual(["doc", "video"]);
+    expect(await listPendingShotDeletions(owner)).toEqual([]);
+  });
+
+  it("keeps a deletion pending when stored video removal fails", async () => {
+    const shot = { ...synced("clip-retry"), video: { storagePath: "users/test-user/videos/retry.mp4" } };
+    await saveShot(shot);
+    await deleteShot(shot.id);
+    const removeShot = vi.fn().mockResolvedValue(undefined);
+    const removeVideo = vi.fn()
+      .mockRejectedValueOnce(new Error("storage down"))
+      .mockResolvedValueOnce(undefined);
+    await expect(flushShotDeletions(owner, removeShot, removeVideo)).rejects.toThrow("storage down");
+    expect(await listPendingShotDeletions(owner)).toHaveLength(1);
+    await flushShotDeletions(owner, removeShot, removeVideo);
+    expect(removeVideo).toHaveBeenLastCalledWith("users/test-user/videos/retry.mp4");
+    expect(await listPendingShotDeletions(owner)).toEqual([]);
+  });
+
+  it("uploads pending shots for the signed-in owner and leaves them pending when the write fails", async () => {
+    const pending = { ...synced("wait"), sync: { status: "pending" as const, changedAt: "now" } };
+    const other = {
+      ...synced("other-pending"),
+      ownerId: "another-user",
+      sync: { status: "pending" as const, changedAt: "now" },
+    };
+    await saveShot(pending);
+    await saveShot(other);
+    const saveCloud = vi.fn(async (shot: ShotRecord) => ({
+      ...shot,
+      sync: {
+        status: "synced" as const,
+        changedAt: "2026-08-12T00:00:00.000Z",
+        lastSyncedAt: "2026-08-12T00:00:00.000Z",
+      },
+    }));
+    saveCloud.mockRejectedValueOnce(new Error("offline"));
+    await expect(flushPendingShotUploads(owner, saveCloud)).rejects.toThrow("offline");
+    expect((await getShot("wait"))?.sync.status).toBe("pending");
+    await expect(flushPendingShotUploads(owner, saveCloud)).resolves.toEqual(["wait"]);
+    expect((await getShot("wait"))?.sync.status).toBe("synced");
+    expect((await getShot("other-pending"))?.sync.status).toBe("pending");
+    expect(saveCloud).toHaveBeenCalledTimes(2);
+  });
+
+  it("continues the upload queue after one pending shot fails", async () => {
+    const newer = {
+      ...synced("newer"),
+      recordedAt: "2026-08-11T00:00:00.000Z",
+      sync: { status: "pending" as const, changedAt: "now" },
+    };
+    const older = {
+      ...synced("older"),
+      recordedAt: "2026-08-09T00:00:00.000Z",
+      sync: { status: "pending" as const, changedAt: "now" },
+    };
+    await saveShot(newer);
+    await saveShot(older);
+    const saveCloud = vi.fn(async (shot: ShotRecord) => {
+      if (shot.id === "newer") throw new Error("offline");
+      return {
+        ...shot,
+        sync: { status: "synced" as const, changedAt: "t", lastSyncedAt: "t" },
+      };
+    });
+    const error = await flushPendingShotUploads(owner, saveCloud).then(
+      () => {
+        throw new Error("expected the failed shot to reject the pass");
+      },
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(PendingUploadError);
+    expect(error).toMatchObject({ message: "offline", syncedIds: ["older"] });
+    expect((await getShot("newer"))?.sync.status).toBe("pending");
+    expect((await getShot("older"))?.sync.status).toBe("synced");
+  });
+
+  it("keeps a just-uploaded shot when a stale snapshot has not caught up", async () => {
+    const shot = synced("just-uploaded");
+    await saveShot(shot);
+    const kept = await reconcileCloudShots(owner, snapshot([]), { preserveIds: [shot.id] });
+    expect(kept.map((item) => item.id)).toContain(shot.id);
+    expect(await getShot(shot.id)).toBeDefined();
   });
 
 });

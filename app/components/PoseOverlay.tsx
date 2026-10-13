@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useLayoutEffect, useRef, type RefObject } from "react";
 
+import { containedObjectRect } from "../lib/frame-rect";
 import type { PoseFrame } from "../lib/types";
 
 const CONNECTIONS: Array<[number, number]> = [
@@ -23,15 +24,24 @@ const CONNECTIONS: Array<[number, number]> = [
   [30, 32],
 ];
 
+const RELEASE_OVERLAY_TOLERANCE_MS = 150;
+
 interface PoseOverlayProps {
   frame?: PoseFrame;
   activeSide?: "left" | "right";
+  videoRef?: RefObject<HTMLVideoElement | null>;
+  releaseTimestampMs?: number;
 }
 
-export function PoseOverlay({ frame, activeSide = "right" }: PoseOverlayProps) {
+export function PoseOverlay({
+  frame,
+  activeSide = "right",
+  videoRef,
+  releaseTimestampMs,
+}: PoseOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const draw = () => {
@@ -41,9 +51,25 @@ export function PoseOverlay({ frame, activeSide = "right" }: PoseOverlayProps) {
       canvas.height = Math.max(1, Math.round(bounds.height * pixelRatio));
       const context = canvas.getContext("2d");
       if (!context) return;
-      context.scale(pixelRatio, pixelRatio);
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
       context.clearRect(0, 0, bounds.width, bounds.height);
-      if (!frame?.landmarks.length) return;
+
+      const video = videoRef?.current ?? null;
+      const away =
+        video !== null &&
+        releaseTimestampMs !== undefined &&
+        Math.abs(video.currentTime * 1000 - releaseTimestampMs) > RELEASE_OVERLAY_TOLERANCE_MS;
+      canvas.style.visibility = away ? "hidden" : "visible";
+      if (away || !frame?.landmarks.length) return;
+
+      const fitted = containedObjectRect(
+        bounds.width,
+        bounds.height,
+        video?.videoWidth ?? 0,
+        video?.videoHeight ?? 0,
+      );
+      const pointX = (normalized: number) => fitted.x + normalized * fitted.width;
+      const pointY = (normalized: number) => fitted.y + normalized * fitted.height;
 
       context.lineCap = "round";
       context.lineJoin = "round";
@@ -62,8 +88,8 @@ export function PoseOverlay({ frame, activeSide = "right" }: PoseOverlayProps) {
               [12, 14, 16, 24, 26, 28, 30, 32].includes(endIndex);
         context.strokeStyle = active ? "rgba(255, 111, 35, .95)" : "rgba(235, 244, 239, .72)";
         context.beginPath();
-        context.moveTo(start.x * bounds.width, start.y * bounds.height);
-        context.lineTo(end.x * bounds.width, end.y * bounds.height);
+        context.moveTo(pointX(start.x), pointY(start.y));
+        context.lineTo(pointX(end.x), pointY(end.y));
         context.stroke();
       }
 
@@ -74,13 +100,7 @@ export function PoseOverlay({ frame, activeSide = "right" }: PoseOverlayProps) {
         context.strokeStyle = "rgba(8, 12, 14, .8)";
         context.lineWidth = 1.5;
         context.beginPath();
-        context.arc(
-          landmark.x * bounds.width,
-          landmark.y * bounds.height,
-          radius,
-          0,
-          Math.PI * 2,
-        );
+        context.arc(pointX(landmark.x), pointY(landmark.y), radius, 0, Math.PI * 2);
         context.fill();
         context.stroke();
       });
@@ -89,8 +109,17 @@ export function PoseOverlay({ frame, activeSide = "right" }: PoseOverlayProps) {
     draw();
     const observer = new ResizeObserver(draw);
     observer.observe(canvas);
-    return () => observer.disconnect();
-  }, [activeSide, frame]);
+    const video = videoRef?.current;
+    video?.addEventListener("timeupdate", draw);
+    video?.addEventListener("seeked", draw);
+    video?.addEventListener("loadedmetadata", draw);
+    return () => {
+      observer.disconnect();
+      video?.removeEventListener("timeupdate", draw);
+      video?.removeEventListener("seeked", draw);
+      video?.removeEventListener("loadedmetadata", draw);
+    };
+  }, [activeSide, frame, releaseTimestampMs, videoRef]);
 
   return <canvas ref={canvasRef} className="pose-overlay" aria-hidden="true" />;
 }

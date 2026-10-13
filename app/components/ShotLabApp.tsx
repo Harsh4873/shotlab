@@ -53,13 +53,14 @@ import {
   localShotStore,
   localVideoStore,
   reassignLocalOwner,
+  shotsForViewer,
 } from "../lib/local-db";
 import {
   cloudShotStore,
   cloudVideoStore,
   firebaseAuth,
 } from "../lib/firebase";
-import { flushShotDeletions } from "../lib/shot-sync";
+import { PendingUploadError, flushPendingShotUploads, flushShotDeletions } from "../lib/shot-sync";
 import { analyzeVideoElement } from "../lib/pose-engine";
 import {
   DEFAULT_SHOTLAB_SETTINGS,
@@ -169,6 +170,17 @@ function metricNumber(metrics: ShotMetrics, key: keyof ShotMetrics) {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function formatFinite(value: number | undefined, format: (value: number) => string) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  return format(value);
+}
+
+function isVideoFile(file: File) {
+  if (file.type.startsWith("video/")) return true;
+  if (!/\.(mp4|m4v|mov|webm|ogv|ogg|mkv|avi|mpeg|mpg)$/i.test(file.name)) return false;
+  return file.type === "" || file.type === "application/octet-stream";
+}
+
 function mergeShots(local: ShotRecord[], incoming: ShotRecord[]) {
   const byId = new Map(local.map((shot) => [shot.id, shot]));
   incoming.forEach((shot) => {
@@ -192,20 +204,36 @@ function Brand() {
 }
 
 function StatusPill({ user, compact = false }: { user: ShotLabUser | null; compact?: boolean }) {
+  const label = user ? (user.email ? `Cloud synced, ${user.email}` : "Cloud synced") : "Stored on this device";
   return (
-    <span className={`status-pill ${user ? "is-online" : ""}`} title={user?.email ?? "Stored on this device"}>
+    <span
+      className={`status-pill ${user ? "is-online" : ""}`}
+      title={user?.email ?? "Stored on this device"}
+      {...(compact ? { role: "img" as const, "aria-label": label } : {})}
+    >
       {user ? <Wifi size={14} /> : <CloudOff size={14} />}
       {!compact && (user ? "Cloud synced" : "On this device")}
     </span>
   );
 }
 
-function SectionHeading({ eyebrow, title, action }: { eyebrow?: string; title: string; action?: ReactNode }) {
+function SectionHeading({
+  eyebrow,
+  title,
+  action,
+  titleLevel = "h2",
+}: {
+  eyebrow?: string;
+  title: string;
+  action?: ReactNode;
+  titleLevel?: "h1" | "h2";
+}) {
+  const TitleTag = titleLevel;
   return (
     <div className="section-heading">
       <div>
         {eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}
-        <h2>{title}</h2>
+        <TitleTag>{title}</TitleTag>
       </div>
       {action}
     </div>
@@ -362,11 +390,11 @@ function HomeScreen({
                 <span className="recent-shot-time">{formatDate(shot.recordedAt)}</span>
                 <span className="recent-shot-metric">
                   <small>Elbow</small>
-                  <b>{shot.metrics.elbowAngleDeg ? `${Math.round(shot.metrics.elbowAngleDeg)}°` : "—"}</b>
+                  <b>{formatFinite(shot.metrics.elbowAngleDeg, (value) => `${Math.round(value)}°`)}</b>
                 </span>
                 <span className="recent-shot-metric">
                   <small>Drift</small>
-                  <b>{shot.metrics.jumpDrift ? `${roundMetric(shot.metrics.jumpDrift, 2)}×` : "—"}</b>
+                  <b>{formatFinite(shot.metrics.jumpDrift, (value) => `${roundMetric(value, 2)}×`)}</b>
                 </span>
                 <ChevronRight size={18} />
               </button>
@@ -404,13 +432,13 @@ function SetupChecklist() {
 function OutcomePicker({ value, onChange }: { value: ShotResult; onChange(value: ShotResult): void }) {
   return (
     <div className="outcome-picker" aria-label="Shot result">
-      <button className={value === "made" ? "selected made" : ""} type="button" onClick={() => onChange("made")}>
+      <button className={value === "made" ? "selected made" : ""} type="button" aria-pressed={value === "made"} onClick={() => onChange("made")}>
         <CircleCheck size={20} /> Made
       </button>
-      <button className={value === "missed" ? "selected missed" : ""} type="button" onClick={() => onChange("missed")}>
+      <button className={value === "missed" ? "selected missed" : ""} type="button" aria-pressed={value === "missed"} onClick={() => onChange("missed")}>
         <CircleX size={20} /> Missed
       </button>
-      <button className={value === "unknown" ? "selected" : ""} type="button" onClick={() => onChange("unknown")}>
+      <button className={value === "unknown" ? "selected" : ""} type="button" aria-pressed={value === "unknown"} onClick={() => onChange("unknown")}>
         Not sure
       </button>
     </div>
@@ -510,6 +538,7 @@ function AnalyzeScreen({
   progressLabel,
   releaseFrameIndex,
   error,
+  saving,
   onPick,
   onReset,
   onAnalyze,
@@ -532,6 +561,7 @@ function AnalyzeScreen({
   progressLabel: string;
   releaseFrameIndex: number;
   error: string | null;
+  saving: boolean;
   onPick(file: File): void;
   onReset(): void;
   onAnalyze(): void;
@@ -547,19 +577,32 @@ function AnalyzeScreen({
       <SectionHeading
         eyebrow="ON-DEVICE ANALYSIS"
         title={phase === "pick" ? "Film one clean rep." : phase === "result" ? "Review the evidence." : "Prepare the clip."}
+        titleLevel="h1"
         action={phase !== "pick" ? <button className="text-button" type="button" onClick={onReset}><RotateCcw size={15} /> Start over</button> : null}
       />
 
       {phase === "pick" ? (
         <>
-          <label className="video-dropzone">
+          <label
+            className="video-dropzone"
+            onDragOver={(event) => {
+              event.preventDefault();
+              if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              const dropped = event.dataTransfer?.files?.[0];
+              if (dropped) onPick(dropped);
+            }}
+          >
             <input
               ref={inputRef}
               type="file"
               accept="video/*"
-              capture="environment"
               onChange={(event) => {
-                const selected = event.target.files?.[0];
+                const input = event.currentTarget;
+                const selected = input.files?.[0];
+                input.value = "";
                 if (selected) onPick(selected);
               }}
             />
@@ -570,6 +613,7 @@ function AnalyzeScreen({
             <span className="primary-button"><Upload size={18} /> Choose video</span>
             <small><LockKeyhole size={13} /> Pose analysis stays on this device.</small>
           </label>
+          {error ? <div className="inline-error"><CircleX size={18} /> {error}</div> : null}
           <SetupChecklist />
         </>
       ) : null}
@@ -581,7 +625,12 @@ function AnalyzeScreen({
               <track kind="captions" src="empty.vtt" srcLang="en" label="No dialogue" default />
             </video>
             {settings.showPoseOverlay && analysis ? (
-              <PoseOverlay frame={frames[releaseFrameIndex]} activeSide={analysis.metrics.dominantSide === "left" ? "left" : "right"} />
+              <PoseOverlay
+                frame={frames[releaseFrameIndex]}
+                activeSide={analysis.metrics.dominantSide === "left" ? "left" : "right"}
+                videoRef={videoRef}
+                releaseTimestampMs={frames[releaseFrameIndex]?.timestampMs}
+              />
             ) : null}
             <div className="video-stage-label"><span>{file.name}</span><b>{formatFileSize(file.size)}</b></div>
           </section>
@@ -626,7 +675,9 @@ function AnalyzeScreen({
                   <span>Quick note <small>optional</small></span>
                   <input value={notes} onChange={(event) => onNotes(event.target.value)} maxLength={180} placeholder="Short, left, tired legs…" />
                 </label>
-                <button className="primary-button wide" type="button" onClick={onSave}><Check size={18} /> Save shot</button>
+                <button className="primary-button wide" type="button" onClick={onSave} disabled={saving}>
+                  {saving ? <LoaderCircle className="spin" size={18} /> : <Check size={18} />} {saving ? "Saving shot" : "Save shot"}
+                </button>
               </section>
             </>
           ) : null}
@@ -674,7 +725,7 @@ function HistoryScreen({
 
   return (
     <div className="screen-content history-screen">
-      <SectionHeading eyebrow="PERSONAL DATASET" title="Shot history" />
+      <SectionHeading eyebrow="PERSONAL DATASET" title="Shot history" titleLevel="h1" />
       <section className="insight-card history-insight">
         <div className="insight-icon"><BarChart3 size={20} /></div>
         <div><p className="eyebrow">STRONGEST SIGNAL</p><h3>{insight.title}</h3><p>{insight.detail}</p></div>
@@ -682,7 +733,7 @@ function HistoryScreen({
 
       <div className="segmented-control" role="group" aria-label="Filter shot history">
         {(["all", "made", "missed"] as const).map((value) => (
-          <button key={value} className={filter === value ? "selected" : ""} type="button" onClick={() => setFilter(value)}>
+          <button key={value} className={filter === value ? "selected" : ""} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)}>
             {value === "all" ? `All ${shots.length}` : value === "made" ? `Makes ${shots.filter((shot) => shot.result === "made").length}` : `Misses ${shots.filter((shot) => shot.result === "missed").length}`}
           </button>
         ))}
@@ -690,16 +741,20 @@ function HistoryScreen({
 
       {visible.length ? (
         <div className="history-list">
-          {visible.map((shot, index) => (
-            <button className="history-row" type="button" key={shot.id} onClick={() => onSelect(shot)}>
-              <span className="shot-number">{String(shots.length - index).padStart(2, "0")}</span>
-              <div><ResultBadge result={shot.result} /><small>{formatDate(shot.recordedAt)}</small></div>
-              <div className="history-metric"><span>Elbow</span><b>{shot.metrics.elbowAngleDeg ? `${Math.round(shot.metrics.elbowAngleDeg)}°` : "—"}</b></div>
-              <div className="history-metric hide-mobile"><span>Knee</span><b>{shot.metrics.kneeAngleDeg ? `${Math.round(shot.metrics.kneeAngleDeg)}°` : "—"}</b></div>
-              <div className="history-metric hide-mobile"><span>Drift</span><b>{shot.metrics.jumpDrift ? `${roundMetric(shot.metrics.jumpDrift, 2)}×` : "—"}</b></div>
-              <ChevronRight size={18} />
-            </button>
-          ))}
+          {visible.map((shot) => {
+            const place = shots.findIndex((item) => item.id === shot.id);
+            const number = place >= 0 ? shots.length - place : 0;
+            return (
+              <button className="history-row" type="button" key={shot.id} onClick={() => onSelect(shot)}>
+                <span className="shot-number">{String(number).padStart(2, "0")}</span>
+                <div><ResultBadge result={shot.result} /><small>{formatDate(shot.recordedAt)}</small></div>
+                <div className="history-metric"><span>Elbow</span><b>{formatFinite(shot.metrics.elbowAngleDeg, (value) => `${Math.round(value)}°`)}</b></div>
+                <div className="history-metric hide-mobile"><span>Knee</span><b>{formatFinite(shot.metrics.kneeAngleDeg, (value) => `${Math.round(value)}°`)}</b></div>
+                <div className="history-metric hide-mobile"><span>Drift</span><b>{formatFinite(shot.metrics.jumpDrift, (value) => `${roundMetric(value, 2)}×`)}</b></div>
+                <ChevronRight size={18} />
+              </button>
+            );
+          })}
         </div>
       ) : (
         <div className="empty-state stacked"><span className="empty-state-icon"><History size={24} /></span><div><h3>No shots in this view.</h3><p>Analyze a clip, then mark it made or missed.</p></div></div>
@@ -754,7 +809,7 @@ function SettingsScreen({
 }) {
   return (
     <div className="screen-content settings-screen">
-      <SectionHeading eyebrow="CONTROL CENTER" title="ShotLab settings" />
+      <SectionHeading eyebrow="CONTROL CENTER" title="ShotLab settings" titleLevel="h1" />
 
       <section className="account-card card-panel">
         <div className="account-icon">{user ? <Cloud size={23} /> : <CloudOff size={23} />}</div>
@@ -821,8 +876,64 @@ export function ShotLabApp() {
   const [progress, setProgress] = useState(0);
   const [progressLabel, setProgressLabel] = useState("Loading pose model");
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const analysisAbortRef = useRef<AbortController | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const savingRef = useRef(false);
+  const syncChainRef = useRef(Promise.resolve());
+  const preserveIdsRef = useRef(new Set<string>());
+  const shotsRevisionRef = useRef(0);
+  const claimRef = useRef(new Map<string, Promise<ShotRecord[]>>());
+  const claimedOwnerRef = useRef<string | null>(null);
+
+  const enqueueSync = useCallback((task: () => Promise<void>) => {
+    const run = syncChainRef.current.then(task);
+    syncChainRef.current = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }, []);
+
+  const uploadPendingShots = useCallback(async (ownerId: string) => {
+    try {
+      const ids = await flushPendingShotUploads(ownerId);
+      for (const id of ids) preserveIdsRef.current.add(id);
+    } catch (error) {
+      if (error instanceof PendingUploadError) {
+        for (const id of error.syncedIds) preserveIdsRef.current.add(id);
+      }
+      throw error;
+    }
+  }, []);
+
+  const claimLocalShots = useCallback((uid: string) => {
+    const existing = claimRef.current.get(uid);
+    if (existing) return existing;
+    let resolveList: (shots: ShotRecord[]) => void = () => {};
+    let rejectList: (error: unknown) => void = () => {};
+    const result = new Promise<ShotRecord[]>((resolve, reject) => {
+      resolveList = resolve;
+      rejectList = reject;
+    });
+    claimRef.current.set(uid, result);
+    void enqueueSync(async () => {
+      try {
+        if (claimedOwnerRef.current !== uid) {
+          preserveIdsRef.current.clear();
+          claimedOwnerRef.current = uid;
+        }
+        await reassignLocalOwner("local", uid);
+        shotsRevisionRef.current += 1;
+        resolveList(await localShotStore.list());
+      } catch (error) {
+        rejectList(error);
+      } finally {
+        if (claimRef.current.get(uid) === result) claimRef.current.delete(uid);
+      }
+    });
+    return result;
+  }, [enqueueSync]);
 
   const deletionRetryRef = useRef(new Map<string, Promise<void>>());
   const retryCloudDeletions = useCallback((ownerId: string) => {
@@ -837,12 +948,13 @@ export function ShotLabApp() {
   }, []);
 
   const refreshLocal = useCallback(async () => {
+    const revision = shotsRevisionRef.current;
     const [localShots, localSettings] = await Promise.all([
       localShotStore.list(),
       localSettingsStore.get(),
     ]);
-    setShots(localShots);
     setSettings(localSettings);
+    if (revision === shotsRevisionRef.current) setShots(localShots);
   }, []);
 
   useEffect(() => {
@@ -872,9 +984,35 @@ export function ShotLabApp() {
     let canceled = false;
     let activeOwner: string | undefined;
     let generation = 0;
-    const warnSync = () => setNotice({ tone: "warning", text: "Cloud sync is temporarily unavailable. Reconnect to retry pending deletions." });
+    const warnSync = () => setNotice({ tone: "warning", text: "Cloud sync is temporarily unavailable. Reconnect to retry." });
     const retry = () => {
-      if (activeOwner) void retryCloudDeletions(activeOwner).catch(warnSync);
+      const ownerId = activeOwner;
+      if (!ownerId) return;
+      void enqueueSync(async () => {
+        try {
+          if (canceled || activeOwner !== ownerId) return;
+          const failures: unknown[] = [];
+          try {
+            await retryCloudDeletions(ownerId);
+          } catch (error) {
+            failures.push(error);
+          }
+          try {
+            await uploadPendingShots(ownerId);
+          } catch (error) {
+            failures.push(error);
+          }
+          if (canceled || activeOwner !== ownerId) return;
+          const revision = shotsRevisionRef.current;
+          const listed = await localShotStore.list();
+          if (!canceled && activeOwner === ownerId && revision === shotsRevisionRef.current) {
+            setShots(listed);
+          }
+          if (failures.length && !canceled) warnSync();
+        } catch {
+          if (!canceled) warnSync();
+        }
+      });
     };
     window.addEventListener("online", retry);
     void firebaseAuth.observe(
@@ -884,26 +1022,60 @@ export function ShotLabApp() {
         cloudUnsubscribe?.();
         cloudUnsubscribe = undefined;
         activeOwner = nextUser?.uid;
-        setUser(nextUser);
-        if (!nextUser) return;
-        retry();
-        let reconciliation = Promise.resolve();
-        void cloudShotStore.subscribe(
-          (snapshot) => {
-            reconciliation = reconciliation.then(async () => {
-              if (canceled || currentGeneration !== generation) return;
-              const reconciled = await localShotStore.reconcileCloud(nextUser.uid, snapshot);
-              if (canceled || currentGeneration !== generation) return;
-              setShots(reconciled);
-              setSelectedHistoryShot((current) => current ? reconciled.find((shot) => shot.id === current.id) ?? null : null);
-              retry();
-            }).catch(warnSync);
-          },
-          { onError: warnSync },
-        ).then((stop) => {
-          if (canceled || currentGeneration !== generation) stop();
-          else cloudUnsubscribe = stop;
-        }).catch(warnSync);
+        if (!nextUser) {
+          claimedOwnerRef.current = null;
+          preserveIdsRef.current.clear();
+          setUser(null);
+          setSelectedHistoryShot(null);
+          return;
+        }
+        const uid = nextUser.uid;
+        void (async () => {
+          let listed: ShotRecord[];
+          try {
+            listed = await claimLocalShots(uid);
+          } catch {
+            if (canceled || currentGeneration !== generation) return;
+            setUser(nextUser);
+            warnSync();
+            return;
+          }
+          if (canceled || currentGeneration !== generation) return;
+          setShots(listed);
+          setUser(nextUser);
+          setSelectedHistoryShot((current) => current ? listed.find((shot) => shot.id === current.id) ?? null : null);
+          if (canceled || currentGeneration !== generation) return;
+          retry();
+          void cloudShotStore.subscribe(
+            (snapshot) => {
+              void enqueueSync(async () => {
+                try {
+                  if (canceled || currentGeneration !== generation) return;
+                  try {
+                    await uploadPendingShots(uid);
+                  } catch {
+                    if (!canceled && currentGeneration === generation) warnSync();
+                  }
+                  if (canceled || currentGeneration !== generation) return;
+                  const keep = [...preserveIdsRef.current];
+                  const reconciled = await localShotStore.reconcileCloud(uid, snapshot, { preserveIds: keep });
+                  for (const id of keep) {
+                    if (snapshot.shots.some((shot) => shot.id === id)) preserveIdsRef.current.delete(id);
+                  }
+                  if (canceled || currentGeneration !== generation) return;
+                  setShots(reconciled);
+                  setSelectedHistoryShot((current) => current ? reconciled.find((shot) => shot.id === current.id) ?? null : null);
+                } catch {
+                  if (!canceled && currentGeneration === generation) warnSync();
+                }
+              });
+            },
+            { onError: warnSync },
+          ).then((stop) => {
+            if (canceled || currentGeneration !== generation) stop();
+            else cloudUnsubscribe = stop;
+          }).catch(warnSync);
+        })();
       },
       () => {},
     ).then((stop) => {
@@ -917,7 +1089,7 @@ export function ShotLabApp() {
       cloudUnsubscribe?.();
       window.removeEventListener("online", retry);
     };
-  }, [retryCloudDeletions]);
+  }, [claimLocalShots, enqueueSync, retryCloudDeletions, uploadPendingShots]);
 
   useEffect(() => {
     if (!notice) return;
@@ -930,7 +1102,18 @@ export function ShotLabApp() {
     analysisAbortRef.current?.abort();
   }, [videoUrl]);
 
+  const viewerId = user?.uid ?? "local";
+  const visibleShots = shotsForViewer(shots, viewerId);
+  const selectedVisible =
+    selectedHistoryShot && selectedHistoryShot.ownerId === viewerId ? selectedHistoryShot : null;
+
   const navigate = (next: Screen) => {
+    if (next !== "analyze" && analysisAbortRef.current) {
+      analysisAbortRef.current.abort();
+      setPhase((current) => (current === "running" ? "ready" : current));
+      setProgress(0);
+      setProgressLabel("Loading pose model");
+    }
     setScreen(next);
     if (next !== "history") setSelectedHistoryShot(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -952,7 +1135,7 @@ export function ShotLabApp() {
   };
 
   const pickVideo = (selected: File) => {
-    if (!selected.type.startsWith("video/")) {
+    if (!isVideoFile(selected)) {
       setAnalysisError("Choose a video file from your camera or library.");
       return;
     }
@@ -968,6 +1151,7 @@ export function ShotLabApp() {
   const runAnalysis = async () => {
     const video = videoRef.current;
     if (!video || !file) return;
+    if (analysisAbortRef.current && !analysisAbortRef.current.signal.aborted) return;
     if (video.readyState < 1) {
       setAnalysisError("Wait a moment for the video to load, then try again.");
       return;
@@ -985,6 +1169,7 @@ export function ShotLabApp() {
         maxLongEdge: 720,
         signal: controller.signal,
         onProgress: (state) => {
+          if (controller.signal.aborted) return;
           setProgress(state.percent);
           setProgressLabel(
             state.stage === "loading-model"
@@ -995,10 +1180,12 @@ export function ShotLabApp() {
           );
         },
       });
+      if (controller.signal.aborted) return;
       const measured = analyzePoseFrames(output.frames, {
         preferredSide: settings.handedness,
-        history: shots,
+        history: visibleShots,
       });
+      if (controller.signal.aborted) return;
       if ((measured.metrics.confidence ?? 0) < 0.22) {
         throw new Error("ShotLab could not see a full, stable body in enough frames. Try a brighter clip with your feet and release hand visible.");
       }
@@ -1006,17 +1193,18 @@ export function ShotLabApp() {
         0,
         output.frames.findIndex((frame) => frame.frameIndex === measured.summary.releaseFrame),
       );
+      if (controller.signal.aborted) return;
       setFrames(output.frames);
       setAnalysis(measured);
       setReleaseFrameIndex(releaseIndex);
       video.currentTime = (output.frames[releaseIndex]?.timestampMs ?? 0) / 1000;
       setPhase("result");
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
+      if (controller.signal.aborted) return;
       setAnalysisError(error instanceof Error ? error.message : "Shot analysis failed.");
       setPhase("ready");
     } finally {
-      analysisAbortRef.current = null;
+      if (analysisAbortRef.current === controller) analysisAbortRef.current = null;
     }
   };
 
@@ -1029,100 +1217,122 @@ export function ShotLabApp() {
       analyzePoseFrames(frames, {
         preferredSide: settings.handedness,
         releaseFrameOverride: frame.frameIndex,
-        history: shots,
+        history: visibleShots,
       }),
     );
     if (videoRef.current) videoRef.current.currentTime = frame.timestampMs / 1000;
   };
 
   const saveCurrentShot = async () => {
-    if (!analysis || !file) return;
-    const timestamp = new Date().toISOString();
-    const shotId = newId("shot");
-    const ownerId = user?.uid ?? "local";
+    if (savingRef.current || !analysis || !file) return;
+    savingRef.current = true;
+    setSaving(true);
+    const clip = file;
+    const measured = analysis;
     let localVideoId: string | undefined;
-    if (settings.keepLocalVideos) {
-      const localVideo = await localVideoStore.storeForShot({
-        shotId,
-        ownerId,
-        blob: file,
-        originalFileName: file.name,
-      });
-      localVideoId = localVideo.id;
-    }
-    let shot: ShotRecord = {
-      schemaVersion: SHOT_RECORD_SCHEMA_VERSION,
-      id: shotId,
-      ownerId,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      recordedAt: timestamp,
-      status: "ready",
-      result: outcome,
-      metrics: analysis.metrics,
-      poseSummary: analysis.summary,
-      poseFrames: frames,
-      capture: {
-        originalFileName: file.name,
-        mimeType: file.type,
-        sizeBytes: file.size,
-        durationMs: videoRef.current ? Math.round(videoRef.current.duration * 1000) : undefined,
-        width: videoRef.current?.videoWidth,
-        height: videoRef.current?.videoHeight,
-        handedness: analysis.metrics.dominantSide,
-        cameraView: settings.preferredCameraView,
-      },
-      video: localVideoId
-        ? { localVideoId, originalFileName: file.name, contentType: file.type, sizeBytes: file.size }
-        : undefined,
-      notes: notes.trim() || undefined,
-      sync: {
-        status: user ? "pending" : "local-only",
-        changedAt: timestamp,
-      },
-    };
-    await localShotStore.save(shot);
-    if (user) {
-      try {
-        shot = await cloudShotStore.save(shot);
-        await localShotStore.save(shot);
-      } catch {
-        setNotice({ tone: "warning", text: "Saved on this device. Cloud sync will retry when Firebase is available." });
-      }
-    }
-    setShots((current) => mergeShots(current, [shot]));
-
-    if (settings.autoUploadVideos && user) {
-      try {
-        const uploaded = await cloudVideoStore.upload({
+    let shotSaved = false;
+    try {
+      const timestamp = new Date().toISOString();
+      const shotId = newId("shot");
+      const ownerId = user?.uid ?? "local";
+      if (settings.keepLocalVideos) {
+        const localVideo = await localVideoStore.storeForShot({
           shotId,
-          videoId: localVideoId,
-          data: file,
-          originalFileName: file.name,
-          contentType: file.type,
-          onProgress: (state) => {
-            setNotice({ tone: "success", text: `Uploading original video · ${Math.round(state.progressPct)}%` });
-          },
+          ownerId,
+          blob: clip,
+          originalFileName: clip.name,
         });
-        shot = await localShotStore.update(shotId, {
-          video: {
-            ...shot.video,
-            storagePath: uploaded.storagePath,
-            downloadUrl: uploaded.downloadUrl,
-            uploadedAt: uploaded.uploadedAt,
-          },
-        });
-        shot = await cloudShotStore.save(shot);
-        await localShotStore.save(shot);
-        setShots((current) => mergeShots(current, [shot]));
-      } catch {
-        setNotice({ tone: "warning", text: "The shot is saved, but cloud video storage is not enabled yet. Metrics still sync." });
+        localVideoId = localVideo.id;
       }
-    } else {
-      setNotice({ tone: "success", text: user ? "Shot saved and synced." : "Shot saved on this device." });
+      let shot: ShotRecord = {
+        schemaVersion: SHOT_RECORD_SCHEMA_VERSION,
+        id: shotId,
+        ownerId,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        recordedAt: timestamp,
+        status: "ready",
+        result: outcome,
+        metrics: measured.metrics,
+        poseSummary: measured.summary,
+        poseFrames: frames,
+        capture: {
+          originalFileName: clip.name,
+          mimeType: clip.type,
+          sizeBytes: clip.size,
+          durationMs: videoRef.current ? Math.round(videoRef.current.duration * 1000) : undefined,
+          width: videoRef.current?.videoWidth,
+          height: videoRef.current?.videoHeight,
+          handedness: measured.metrics.dominantSide,
+          cameraView: settings.preferredCameraView,
+        },
+        video: localVideoId
+          ? { localVideoId, originalFileName: clip.name, contentType: clip.type, sizeBytes: clip.size }
+          : undefined,
+        notes: notes.trim() || undefined,
+        sync: {
+          status: user ? "pending" : "local-only",
+          changedAt: timestamp,
+        },
+      };
+      await localShotStore.save(shot);
+      shotSaved = true;
+      let cloudFailed = false;
+      if (user) {
+        try {
+          shot = await cloudShotStore.save(shot);
+          await localShotStore.save(shot);
+        } catch {
+          cloudFailed = true;
+        }
+      }
+      setShots((current) => mergeShots(current, [shot]));
+
+      if (settings.autoUploadVideos && user && !cloudFailed) {
+        try {
+          const uploaded = await cloudVideoStore.upload({
+            shotId,
+            videoId: localVideoId,
+            data: clip,
+            originalFileName: clip.name,
+            contentType: clip.type,
+            onProgress: (state) => {
+              setNotice({ tone: "success", text: `Uploading original video · ${Math.round(state.progressPct)}%` });
+            },
+          });
+          shot = await localShotStore.update(shotId, {
+            video: {
+              ...shot.video,
+              storagePath: uploaded.storagePath,
+              downloadUrl: uploaded.downloadUrl,
+              uploadedAt: uploaded.uploadedAt,
+            },
+          });
+          shot = await cloudShotStore.save(shot);
+          await localShotStore.save(shot);
+          setShots((current) => mergeShots(current, [shot]));
+        } catch {
+          setNotice({ tone: "warning", text: "The shot is saved, but cloud video storage is not enabled yet. Metrics still sync." });
+        }
+      } else if (cloudFailed) {
+        setNotice({ tone: "warning", text: "Saved on this device. Cloud sync will retry when Firebase is available." });
+      } else {
+        setNotice({ tone: "success", text: user ? "Shot saved and synced." : "Shot saved on this device." });
+      }
+      resetAnalysis();
+      navigate("home");
+    } catch (error) {
+      if (localVideoId && !shotSaved) {
+        await localVideoStore.delete(localVideoId).catch(() => {});
+      }
+      setNotice({
+        tone: "error",
+        text: error instanceof Error && error.message ? error.message : "ShotLab could not save this shot.",
+      });
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
     }
-    resetAnalysis();
-    navigate("home");
   };
 
   const updateAppSettings = async (update: Partial<ShotLabSettings>) => {
@@ -1133,20 +1343,36 @@ export function ShotLabApp() {
   const signIn = async () => {
     try {
       const result = await firebaseAuth.signInWithGoogle();
-      await reassignLocalOwner("local", result.user.uid);
-      const localShots = await localShotStore.list();
-      setUser(result.user);
-      setShots(localShots);
-      for (const shot of localShots.filter((item) => item.ownerId === result.user.uid && item.sync.status !== "synced")) {
-        try {
-          const synced = await cloudShotStore.save(shot);
-          await localShotStore.save(synced);
-        } catch {
-          break;
-        }
+      let listed: ShotRecord[];
+      try {
+        listed = await claimLocalShots(result.user.uid);
+      } catch (error) {
+        await firebaseAuth.signOut().catch(() => {});
+        setUser(null);
+        setNotice({
+          tone: "error",
+          text: error instanceof Error && error.message
+            ? error.message
+            : "ShotLab could not move local shots onto this account.",
+        });
+        return;
       }
-      await refreshLocal();
-      setNotice({ tone: "success", text: "Firebase sync is connected." });
+      setShots(listed);
+      setUser(result.user);
+      try {
+        await enqueueSync(async () => {
+          try {
+            await uploadPendingShots(result.user.uid);
+          } finally {
+            const revision = shotsRevisionRef.current;
+            const refreshed = await localShotStore.list();
+            if (revision === shotsRevisionRef.current) setShots(refreshed);
+          }
+        });
+        setNotice({ tone: "success", text: "Firebase sync is connected." });
+      } catch {
+        setNotice({ tone: "warning", text: "Signed in on this device. Some shots will sync when Firebase is available." });
+      }
     } catch (error) {
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "Google sign-in did not finish." });
     }
@@ -1155,17 +1381,22 @@ export function ShotLabApp() {
   const signOut = async () => {
     await firebaseAuth.signOut();
     setUser(null);
+    setSelectedHistoryShot(null);
     setNotice({ tone: "success", text: "Signed out. Existing local shots stay on this device." });
   };
 
   const deleteHistoryShot = async (shot: ShotRecord) => {
+    const message = shot.ownerId === "local"
+      ? "Delete this shot and its video from this device?"
+      : "Delete this shot and its video from this device and your synced history?";
+    if (!window.confirm(message)) return;
     await localShotStore.delete(shot.id);
     setShots((current) => current.filter((item) => item.id !== shot.id));
     setSelectedHistoryShot(null);
     setNotice({ tone: "success", text: "Shot removed from your history." });
     if (user && shot.ownerId === user.uid) {
       try {
-        await retryCloudDeletions(user.uid);
+        await enqueueSync(() => retryCloudDeletions(user.uid).then(() => undefined));
       } catch {
         setNotice({ tone: "warning", text: "Shot removed on this device. Cloud deletion will retry when you reconnect." });
       }
@@ -1190,13 +1421,14 @@ export function ShotLabApp() {
           settings={settings}
           analysis={analysis}
           frames={frames}
-          history={shots}
+          history={visibleShots}
           outcome={outcome}
           notes={notes}
           progress={progress}
           progressLabel={progressLabel}
           releaseFrameIndex={releaseFrameIndex}
           error={analysisError}
+          saving={saving}
           onPick={pickVideo}
           onReset={resetAnalysis}
           onAnalyze={() => void runAnalysis()}
@@ -1210,8 +1442,8 @@ export function ShotLabApp() {
     if (screen === "history") {
       return (
         <HistoryScreen
-          shots={shots}
-          selected={selectedHistoryShot}
+          shots={visibleShots}
+          selected={selectedVisible}
           onSelect={setSelectedHistoryShot}
           onDelete={(shot) => void deleteHistoryShot(shot)}
         />
@@ -1232,7 +1464,7 @@ export function ShotLabApp() {
     }
     return (
       <HomeScreen
-        shots={shots}
+        shots={visibleShots}
         user={user}
         onAnalyze={() => navigate("analyze")}
         onHistory={() => navigate("history")}

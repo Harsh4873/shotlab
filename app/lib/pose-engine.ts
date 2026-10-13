@@ -174,6 +174,46 @@ function assetUrl(path: string) {
   return new URL(path.replace(/^\//, ""), document.baseURI).href;
 }
 
+/** One filmed rep. Longer clips are refused before a worker is created. */
+export const MAX_ANALYSIS_CLIP_SECONDS = 60;
+
+export function planSampleTimes(
+  duration: number,
+  requestedFps: number,
+  maxFrames: number,
+): { sampleTimes: number[]; sampledFps: number } {
+  if (!Number.isFinite(duration) || duration <= 0) {
+    throw new Error("ShotLab could not read this video’s duration.");
+  }
+  if (!Number.isFinite(requestedFps) || requestedFps <= 0 || !Number.isFinite(maxFrames) || maxFrames < 1) {
+    throw new Error("ShotLab could not plan this analysis.");
+  }
+  if (duration > MAX_ANALYSIS_CLIP_SECONDS) {
+    throw new Error(
+      `This clip is longer than ${MAX_ANALYSIS_CLIP_SECONDS} seconds. Trim it to one shot and try again.`,
+    );
+  }
+
+  const frameCap = Math.floor(maxFrames);
+  const budgetFps = frameCap / duration;
+  const floorFps = duration * 4 <= frameCap ? Math.min(4, requestedFps) : 0;
+  const sampledFps = Math.min(requestedFps, Math.max(budgetFps, floorFps));
+  const intervalSeconds = 1 / sampledFps;
+  const sampleTimes: number[] = [];
+  const lastTime = Math.max(0, duration - 0.002);
+  for (
+    let seconds = 0;
+    seconds < duration && sampleTimes.length < frameCap;
+    seconds += intervalSeconds
+  ) {
+    sampleTimes.push(Math.min(seconds, lastTime));
+  }
+  if (sampleTimes.length < frameCap && sampleTimes.at(-1) !== lastTime) {
+    sampleTimes.push(lastTime);
+  }
+  return { sampleTimes, sampledFps };
+}
+
 export async function analyzeVideoElement(
   video: HTMLVideoElement,
   options: VideoAnalysisOptions = {},
@@ -183,16 +223,11 @@ export async function analyzeVideoElement(
     throw new Error("ShotLab could not read this video’s duration.");
   }
 
-  const maxFrames = options.maxFrames ?? 600;
-  const requestedFps = options.targetFps ?? 20;
-  const sampledFps = Math.max(4, Math.min(requestedFps, maxFrames / duration));
-  const intervalSeconds = 1 / sampledFps;
-  const sampleTimes: number[] = [];
-  const lastTime = Math.max(0, duration - 0.002);
-  for (let seconds = 0; seconds < duration; seconds += intervalSeconds) {
-    sampleTimes.push(Math.min(seconds, lastTime));
-  }
-  if (sampleTimes.at(-1) !== lastTime) sampleTimes.push(lastTime);
+  const { sampleTimes, sampledFps } = planSampleTimes(
+    duration,
+    options.targetFps ?? 20,
+    options.maxFrames ?? 600,
+  );
 
   const client = new PoseWorkerClient();
   let delegate: "GPU" | "CPU" = "CPU";

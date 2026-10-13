@@ -207,7 +207,9 @@ export async function saveShots(shots: readonly ShotRecord[]): Promise<void> {
 export async function reconcileCloudShots(
   ownerId: string,
   snapshot: { shots: readonly ShotRecord[]; fromCache: boolean; hasPendingWrites: boolean },
+  options?: { preserveIds?: readonly string[] },
 ): Promise<ShotRecord[]> {
+  const preserveIds = new Set(options?.preserveIds ?? []);
   const database = await getLocalDatabase();
   const transaction = database.transaction(["shots", "videos", "deletions"], "readwrite");
   const shotStore = transaction.objectStore("shots");
@@ -223,7 +225,7 @@ export async function reconcileCloudShots(
       }
     }
     for (const shot of localShots) {
-      if (shot.sync.status !== "synced" || remoteIds.has(shot.id)) continue;
+      if (shot.sync.status !== "synced" || remoteIds.has(shot.id) || preserveIds.has(shot.id)) continue;
       await shotStore.delete(shot.id);
       await deletionStore.put({ id: shot.id, ownerId, pending: false });
       const videoStore = transaction.objectStore("videos");
@@ -598,6 +600,10 @@ export async function reassignLocalOwner(
   }
 
   await transaction.done;
+}
+
+export function shotsForViewer(shots: readonly ShotRecord[], viewerId: string): ShotRecord[] {
+  return shots.filter((shot) => shot.ownerId === viewerId);
 }
 
 export const localShotStore = {

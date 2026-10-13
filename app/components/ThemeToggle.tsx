@@ -24,8 +24,8 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
       className={`theme-toggle${compact ? " compact" : ""}`}
       type="button"
       role="switch"
-      aria-checked={light}
-      aria-label={light ? "Light theme" : "Dark theme"}
+      aria-checked={!light}
+      aria-label="Dark theme"
       title={`Switch to ${next} theme`}
       onClick={() => chooseTheme(next)}
     >

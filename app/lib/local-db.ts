@@ -221,6 +221,8 @@ export async function reconcileCloudShots(
   if (!snapshot.fromCache && !snapshot.hasPendingWrites) {
     for (const deletion of await deletionStore.getAll()) {
       if (deletion.ownerId === ownerId && deletion.pending && !remoteIds.has(deletion.id)) {
+        // A missing document is not proof the storage object was deleted.
+        if (deletion.storagePath) continue;
         await deletionStore.put({ ...deletion, pending: false });
       }
     }

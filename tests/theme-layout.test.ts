@@ -82,15 +82,17 @@ describe("narrow hero containment", () => {
     return Number(match?.[2]);
   }
 
-  it("keeps both rotated decorations inside 320px, 390px, and 680px viewports", () => {
+  it("keeps the release card in flow and the court decoration inside narrow viewports", () => {
     expect(css).toMatch(/\*\s*{\s*box-sizing:\s*border-box;/);
 
     const padding = horizontalContentPadding();
     const release = rule(mobile, ".hero-release-card {");
-    const releaseRight = dimension(release, "right", "px");
+    expect(release).toMatch(/position:\s*relative/);
+    expect(release).not.toMatch(/position:\s*absolute/);
+    expect(release).not.toMatch(/bottom:\s*-/);
+    expect(release).toMatch(/max-width:\s*100%/);
     const releaseWidth = dimension(release, "width", "px");
     const releaseHeight = dimension(release, "height", "px");
-    const releaseRotation = rotation(release);
     expect(releaseWidth).toBeGreaterThan(0);
     expect(releaseHeight).toBeGreaterThan(0);
 
@@ -105,14 +107,9 @@ describe("narrow hero containment", () => {
     expect(courtHeight).toBeGreaterThan(0);
 
     for (const viewport of [320, 390, 680]) {
-      const heroWidth = viewport - 2 * padding;
+      expect(releaseWidth, `release card width at ${viewport}px`).toBeLessThanOrEqual(viewport - 2 * padding);
 
-      // right positions the unrotated border box; rotation expands equally
-      // around its centre, so use the rotated AABB's half-width for max-x.
-      const releaseCentre = heroWidth - releaseRight - releaseWidth / 2;
-      const releaseMaxX = padding + releaseCentre
-        + rotatedWidth(releaseWidth, releaseHeight, releaseRotation) / 2;
-      expect(releaseMaxX, `release card max-x at ${viewport}px`).toBeLessThanOrEqual(viewport);
+      const heroWidth = viewport - 2 * padding;
 
       // The court has auto width resolved by its percentage left/right insets.
       const courtWidth = heroWidth * (1 - courtLeft - courtRight);

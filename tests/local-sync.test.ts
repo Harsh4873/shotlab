@@ -15,7 +15,8 @@ import {
   shotsForViewer,
   storeVideoForShot,
 } from "../app/lib/local-db";
-import { PendingUploadError, flushShotDeletions, flushPendingShotUploads } from "../app/lib/shot-sync";
+import { FirebasePermanentAccountRequiredError } from "../app/lib/firebase";
+import { PendingUploadError, flushShotDeletions, flushPendingShotUploads, videoUploadFailureMessage } from "../app/lib/shot-sync";
 import type { ShotRecord } from "../app/lib/types";
 import { shotRecord, syntheticShotFrames } from "./helpers/shot-fixtures";
 
@@ -265,4 +266,47 @@ describe("cloud history reconciliation", () => {
     expect(await getShot(shot.id)).toBeDefined();
   });
 
+  it("does not tombstone a preserved shot, so a later snapshot can update it", async () => {
+    const shot = synced("just-saved");
+    await saveShot(shot);
+    await reconcileCloudShots(owner, snapshot([]), { preserveIds: [shot.id] });
+    expect(await getShot(shot.id)).toEqual(shot);
+    const caughtUp = { ...shot, result: "missed" as const, notes: "later" };
+    await reconcileCloudShots(owner, snapshot([caughtUp]));
+    expect(await getShot(shot.id)).toMatchObject({ result: "missed", notes: "later" });
+  });
+
+  it("keeps a storage deletion pending when the document is already gone", async () => {
+    const shot = { ...synced("clip-gone"), video: { storagePath: "users/test-user/videos/clip.mp4" } };
+    await saveShot(shot);
+    await deleteShot(shot.id);
+    await reconcileCloudShots(owner, snapshot([]));
+    expect(await listPendingShotDeletions(owner)).toEqual([{
+      id: shot.id,
+      ownerId: owner,
+      storagePath: "users/test-user/videos/clip.mp4",
+      pending: true,
+    }]);
+  });
+
+  it("acknowledges a storage deletion when the object is already gone", async () => {
+    const shot = { ...synced("clip-missing"), video: { storagePath: "users/test-user/videos/missing.mp4" } };
+    await saveShot(shot);
+    await deleteShot(shot.id);
+    const removeShot = vi.fn().mockResolvedValue(undefined);
+    const removeVideo = vi.fn().mockRejectedValue(Object.assign(new Error("Not found"), { code: "storage/object-not-found" }));
+    await flushShotDeletions(owner, removeShot, removeVideo);
+    expect(await listPendingShotDeletions(owner)).toEqual([]);
+  });
+
+});
+
+describe("video upload failure copy", () => {
+  it("separates account, size, network, and other upload failures", () => {
+    expect(videoUploadFailureMessage(new FirebasePermanentAccountRequiredError())).toMatch(/Google account/);
+    expect(videoUploadFailureMessage(new RangeError("too big"))).toMatch(/500 MB/);
+    expect(videoUploadFailureMessage(Object.assign(new Error("offline"), { code: "storage/retry-limit-exceeded" }))).toMatch(/network/);
+    expect(videoUploadFailureMessage(new Error("permission"))).toMatch(/did not upload/);
+    expect(videoUploadFailureMessage(new Error("permission"))).not.toMatch(/not enabled yet/);
+  });
 });

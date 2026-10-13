@@ -211,7 +211,17 @@ export function planSampleTimes(
   if (sampleTimes.length < frameCap && sampleTimes.at(-1) !== lastTime) {
     sampleTimes.push(lastTime);
   }
-  return { sampleTimes, sampledFps };
+
+  // detectForVideo requires a strictly increasing millisecond timestamp.
+  const increasing: number[] = [];
+  let previousStamp = -1;
+  for (const seconds of sampleTimes) {
+    const stamp = Math.round(seconds * 1000);
+    if (stamp <= previousStamp) continue;
+    increasing.push(seconds);
+    previousStamp = stamp;
+  }
+  return { sampleTimes: increasing, sampledFps };
 }
 
 export async function analyzeVideoElement(

@@ -60,13 +60,14 @@ import {
   cloudVideoStore,
   firebaseAuth,
 } from "../lib/firebase";
-import { PendingUploadError, flushPendingShotUploads, flushShotDeletions } from "../lib/shot-sync";
+import { PendingUploadError, flushPendingShotUploads, flushShotDeletions, videoUploadFailureMessage } from "../lib/shot-sync";
 import { analyzeVideoElement } from "../lib/pose-engine";
 import {
   DEFAULT_SHOTLAB_SETTINGS,
   SETTINGS_SCHEMA_VERSION,
   SHOT_RECORD_SCHEMA_VERSION,
   type Handedness,
+  type PoseAnalysisSummary,
   type PoseFrame,
   type ShotLabSettings,
   type ShotLabUser,
@@ -143,6 +144,36 @@ const METRIC_CARDS: Array<{
     format: (value) => `${roundMetric(value, 2)}s`,
     sublabel: "after upward motion",
   },
+  {
+    key: "hipAngleDeg",
+    label: "Hip angle",
+    format: (value) => `${roundMetric(value, 1)}°`,
+    sublabel: "at the load",
+  },
+  {
+    key: "shoulderTiltDeg",
+    label: "Shoulder tilt",
+    format: (value) => `${roundMetric(value, 1)}°`,
+    sublabel: "at release",
+  },
+  {
+    key: "landingWidthRatio",
+    label: "Landing width",
+    format: (value) => `${roundMetric(value, 2)}×`,
+    sublabel: "shoulder width",
+  },
+  {
+    key: "landingDisplacement",
+    label: "Landing drift",
+    format: (value) => `${roundMetric(value, 2)}×`,
+    sublabel: "shoulder width",
+  },
+  {
+    key: "landingLateralDisplacement",
+    label: "Landing side drift",
+    format: (value) => `${roundMetric(value, 2)}×`,
+    sublabel: "shoulder width",
+  },
 ];
 
 function newId(prefix: string) {
@@ -173,6 +204,64 @@ function metricNumber(metrics: ShotMetrics, key: keyof ShotMetrics) {
 function formatFinite(value: number | undefined, format: (value: number) => string) {
   if (typeof value !== "number" || !Number.isFinite(value)) return "—";
   return format(value);
+}
+
+function formatComparisonValue(value: number | undefined, unit: string) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  const digits = unit === "°" ? 1 : 2;
+  return `${roundMetric(value, digits)}${unit}`;
+}
+
+function releasePhaseMarks(frames: PoseFrame[], summary: PoseAnalysisSummary) {
+  const span = Math.max(1, frames.length - 1);
+  const marks: Array<{ key: string; label: string; index: number }> = [];
+  const add = (key: string, label: string, frameIndex: number | undefined) => {
+    if (frameIndex === undefined) return;
+    const index = frames.findIndex((frame) => frame.frameIndex === frameIndex);
+    if (index < 0) return;
+    const existing = marks.find((mark) => mark.index === index);
+    if (existing) {
+      existing.label = `${existing.label} / ${label}`;
+      return;
+    }
+    marks.push({ key, label, index });
+  };
+  add("load", "Load", summary.loadFrame);
+  add("release", "Release", summary.releaseFrame);
+  add("landing", "Landing", summary.landingFrame);
+  const placed = marks.map((mark) => ({ ...mark, percent: (mark.index / span) * 100 }));
+  // Width is estimated for a 320px phone so nearby labels stack instead of painting on top of each other.
+  const boxFor = (percent: number, label: string) => {
+    const width = Math.min(92, 4 + label.length * 3.8);
+    if (percent <= 8) return { start: percent, end: Math.min(100, percent + width) };
+    if (percent >= 92) return { start: Math.max(0, percent - width), end: percent };
+    return { start: Math.max(0, percent - width / 2), end: Math.min(100, percent + width / 2) };
+  };
+  const lanes: Array<Array<{ start: number; end: number }>> = [];
+  const withLanes = placed.map((mark) => {
+    const box = boxFor(mark.percent, mark.label);
+    let lane = lanes.findIndex((row) => row.every((used) => box.end + 1.5 < used.start || box.start > used.end + 1.5));
+    if (lane < 0) {
+      lane = lanes.length;
+      lanes.push([]);
+    }
+    lanes[lane].push(box);
+    return { ...mark, lane };
+  });
+  const laneCount = Math.max(1, lanes.length);
+  return withLanes.map((mark) => ({ ...mark, lanes: laneCount }));
+}
+
+function protectShotIds(
+  ids: readonly string[],
+  ownerId: string,
+  preserveIds: Set<string>,
+  preserveOwner: { current: string | null },
+) {
+  if (!ids.length) return;
+  if (preserveOwner.current !== null && preserveOwner.current !== ownerId) return;
+  preserveOwner.current = ownerId;
+  for (const id of ids) preserveIds.add(id);
 }
 
 function isVideoFile(file: File) {
@@ -207,7 +296,7 @@ function StatusPill({ user, compact = false }: { user: ShotLabUser | null; compa
   const label = user ? (user.email ? `Cloud synced, ${user.email}` : "Cloud synced") : "Stored on this device";
   return (
     <span
-      className={`status-pill ${user ? "is-online" : ""}`}
+      className={`status-pill ${compact ? "compact" : ""} ${user ? "is-online" : ""}`}
       title={user?.email ?? "Stored on this device"}
       {...(compact ? { role: "img" as const, "aria-label": label } : {})}
     >
@@ -288,7 +377,7 @@ function HomeScreen({
   shots: ShotRecord[];
   user: ShotLabUser | null;
   onAnalyze(): void;
-  onHistory(): void;
+  onHistory(shot?: ShotRecord): void;
 }) {
   const marked = shots.filter((shot) => shot.result !== "unknown");
   const makes = marked.filter((shot) => shot.result === "made");
@@ -379,13 +468,13 @@ function HomeScreen({
           eyebrow={user ? "SYNCED HISTORY" : "LOCAL HISTORY"}
           title="Recent shots"
           action={shots.length ? (
-            <button className="text-button" type="button" onClick={onHistory}>View all <ChevronRight size={16} /></button>
+            <button className="text-button" type="button" onClick={() => onHistory()}>View all <ChevronRight size={16} /></button>
           ) : null}
         />
         {shots.length ? (
           <div className="recent-list">
             {shots.slice(0, 3).map((shot) => (
-              <button className="recent-shot" type="button" key={shot.id} onClick={onHistory}>
+              <button className="recent-shot" type="button" key={shot.id} onClick={() => onHistory(shot)}>
                 <ResultBadge result={shot.result} />
                 <span className="recent-shot-time">{formatDate(shot.recordedAt)}</span>
                 <span className="recent-shot-metric">
@@ -460,6 +549,7 @@ function AnalysisResults({
 }) {
   const comparisons = compareOutcomes(history, analysis.metrics);
   const releaseFrame = frames[releaseFrameIndex];
+  const releaseMarks = releasePhaseMarks(frames, analysis.summary);
   return (
     <>
       <section className="result-hero">
@@ -489,7 +579,20 @@ function AnalysisResults({
           onChange={(event) => onReleaseFrameChange(Number(event.target.value))}
           aria-label="Correct the release frame"
         />
-        <div className="release-ticks"><span>Load</span><span>Release</span><span>Landing</span></div>
+        <div className="release-ticks" style={{ height: `${(releaseMarks[0]?.lanes ?? 1) * 18}px` }}>
+          {releaseMarks.map((mark) => (
+            <span
+              key={mark.key}
+              style={{
+                left: `${mark.percent}%`,
+                top: `${mark.lane * 18}px`,
+                transform: mark.percent <= 8 ? "translateX(0)" : mark.percent >= 92 ? "translateX(-100%)" : "translateX(-50%)",
+              }}
+            >
+              {mark.label}
+            </span>
+          ))}
+        </div>
       </section>
 
       <section>
@@ -502,11 +605,11 @@ function AnalysisResults({
         {history.filter((shot) => shot.result === "made").length ? (
           <div className="comparison-table">
             <div className="comparison-row header"><span>Metric</span><span>This shot</span><span>Makes avg</span></div>
-            {comparisons.slice(0, 6).map((comparison) => (
+            {comparisons.map((comparison) => (
               <div className="comparison-row" key={comparison.key}>
                 <span>{comparison.label}</span>
-                <b>{comparison.current === undefined ? "—" : `${roundMetric(comparison.current, comparison.unit === "s" ? 2 : 1)}${comparison.unit}`}</b>
-                <span>{comparison.made.mean === undefined ? "—" : `${roundMetric(comparison.made.mean, comparison.unit === "s" ? 2 : 1)}${comparison.unit}`}</span>
+                <b>{formatComparisonValue(comparison.current, comparison.unit)}</b>
+                <span>{formatComparisonValue(comparison.made.mean, comparison.unit)}</span>
               </div>
             ))}
           </div>
@@ -546,6 +649,7 @@ function AnalyzeScreen({
   onNotes,
   onReleaseFrame,
   onSave,
+  onCancel,
 }: {
   phase: AnalyzePhase;
   file: File | null;
@@ -569,6 +673,7 @@ function AnalyzeScreen({
   onNotes(value: string): void;
   onReleaseFrame(index: number): void;
   onSave(): void;
+  onCancel(): void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -578,7 +683,7 @@ function AnalyzeScreen({
         eyebrow="ON-DEVICE ANALYSIS"
         title={phase === "pick" ? "Film one clean rep." : phase === "result" ? "Review the evidence." : "Prepare the clip."}
         titleLevel="h1"
-        action={phase !== "pick" ? <button className="text-button" type="button" onClick={onReset}><RotateCcw size={15} /> Start over</button> : null}
+        action={phase !== "pick" ? <button className="text-button" type="button" onClick={onReset} disabled={saving}><RotateCcw size={15} /> Start over</button> : null}
       />
 
       {phase === "pick" ? (
@@ -622,7 +727,7 @@ function AnalyzeScreen({
         <>
           <section className="video-stage">
             <video ref={videoRef} src={videoUrl} controls playsInline preload="metadata">
-              <track kind="captions" src="empty.vtt" srcLang="en" label="No dialogue" default />
+              <track kind="captions" src="empty.vtt" srcLang="en" label="No dialogue" />
             </video>
             {settings.showPoseOverlay && analysis ? (
               <PoseOverlay
@@ -646,11 +751,20 @@ function AnalyzeScreen({
           ) : null}
 
           {phase === "running" ? (
-            <section className="analysis-progress card-panel" aria-live="polite">
-              <div className="progress-top"><span><LoaderCircle className="spin" size={20} /> {progressLabel}</span><strong>{progress}%</strong></div>
-              <div className="progress-track"><i style={{ width: `${progress}%` }} /></div>
-              <p>Keep ShotLab open while this clip is analyzed. The video is not being sent to an AI server.</p>
-            </section>
+            <div className="analysis-progress card-panel">
+              <div
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.max(0, Math.min(100, Math.round(progress)))}
+                aria-label={progressLabel}
+              >
+                <div className="progress-top"><span><LoaderCircle className="spin" size={20} /> {progressLabel}</span><strong>{progress}%</strong></div>
+                <div className="progress-track"><i style={{ width: `${progress}%` }} /></div>
+              </div>
+              <p>Keep ShotLab open while this clip is analyzed. Pose data stays on this device. Cancel, or leave this screen, to stop.</p>
+              <button className="text-button" type="button" onClick={onCancel}>Cancel analysis</button>
+            </div>
           ) : null}
 
           {error ? <div className="inline-error"><CircleX size={18} /> {error}</div> : null}
@@ -687,6 +801,86 @@ function AnalyzeScreen({
   );
 }
 
+function HistoryClip({ shot }: { shot: ShotRecord }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const aliveRef = useRef(false);
+  const hasClip = Boolean(shot.video?.localVideoId || shot.video?.storagePath || shot.video?.downloadUrl);
+
+  useEffect(() => {
+    if (!hasClip) return undefined;
+    aliveRef.current = true;
+    let objectUrl: string | undefined;
+    let canceled = false;
+    const reveal = (next: string) => {
+      if (!canceled) setSrc(next);
+    };
+    void (async () => {
+      try {
+        const videos = await localVideoStore.getForShot(shot.id);
+        if (canceled) return;
+        const blob = videos.find((video) => video.blob.size > 0)?.blob;
+        if (blob) {
+          objectUrl = URL.createObjectURL(blob);
+          if (canceled) {
+            URL.revokeObjectURL(objectUrl);
+            objectUrl = undefined;
+            return;
+          }
+          reveal(objectUrl);
+          return;
+        }
+        if (shot.video?.storagePath) {
+          try {
+            const downloadUrl = await cloudVideoStore.getDownloadUrl(shot.video.storagePath);
+            reveal(downloadUrl);
+            return;
+          } catch (error) {
+            if (canceled) return;
+            if (shot.video.downloadUrl) {
+              reveal(shot.video.downloadUrl);
+              return;
+            }
+            throw error;
+          }
+        }
+        if (shot.video?.downloadUrl) {
+          reveal(shot.video.downloadUrl);
+          return;
+        }
+        if (!canceled) setFailed(true);
+      } catch {
+        if (!canceled) setFailed(true);
+      }
+    })();
+    return () => {
+      canceled = true;
+      aliveRef.current = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [hasClip, shot.id, shot.video?.downloadUrl, shot.video?.localVideoId, shot.video?.storagePath]);
+
+  if (!hasClip) return null;
+  if (failed) return <p className="clip-status" role="status">The clip is saved, but it could not be opened on this device.</p>;
+  if (!src) return <p className="clip-status" role="status">Loading clip.</p>;
+  return (
+    <section className="video-stage history-clip">
+      <video
+        src={src}
+        controls
+        playsInline
+        preload="metadata"
+        aria-label={shot.capture?.originalFileName ?? "Saved shot clip"}
+        onError={() => {
+          if (aliveRef.current) setFailed(true);
+        }}
+      >
+        <track kind="captions" src="empty.vtt" srcLang="en" label="No dialogue" />
+      </video>
+    </section>
+  );
+}
+
 function HistoryScreen({
   shots,
   selected,
@@ -711,6 +905,10 @@ function HistoryScreen({
           <div><ResultBadge result={selected.result} /><h1>{formatDate(selected.recordedAt)}</h1><p>{selected.capture?.originalFileName ?? "Shot clip"}</p></div>
           <button className="icon-button danger" type="button" onClick={() => onDelete(selected)} aria-label="Delete shot"><Trash2 size={18} /></button>
         </div>
+        <HistoryClip
+          key={`${selected.id}:${selected.video?.localVideoId ?? ""}:${selected.video?.storagePath ?? ""}:${selected.video?.downloadUrl ?? ""}`}
+          shot={selected}
+        />
         <MetricGrid metrics={selected.metrics} />
         {selected.notes ? <blockquote className="shot-note">“{selected.notes}”</blockquote> : null}
         <section className="card-panel detail-meta">
@@ -765,11 +963,11 @@ function HistoryScreen({
           <SectionHeading eyebrow="MAKES VS MISSES" title="Your emerging ranges" />
           <div className="comparison-table">
             <div className="comparison-row header"><span>Metric</span><span>Makes</span><span>Misses</span></div>
-            {comparison.slice(0, 5).map((item) => (
+            {comparison.map((item) => (
               <div className="comparison-row" key={item.key}>
                 <span>{item.label}</span>
-                <b>{item.made.mean === undefined ? "—" : `${roundMetric(item.made.mean, 1)}${item.unit}`}</b>
-                <span>{item.missed.mean === undefined ? "—" : `${roundMetric(item.missed.mean, 1)}${item.unit}`}</span>
+                <b>{formatComparisonValue(item.made.mean, item.unit)}</b>
+                <span>{formatComparisonValue(item.missed.mean, item.unit)}</span>
               </div>
             ))}
           </div>
@@ -845,7 +1043,11 @@ function SettingsScreen({
 
       <section className="settings-group card-panel">
         <div className="settings-group-title"><Download size={18} /><div><h3>Install ShotLab</h3><p>Keep it on your home screen for faster gym access.</p></div></div>
-        <button className="secondary-button wide" type="button" onClick={onInstall} disabled={!installPrompt}><Download size={17} /> {installPrompt ? "Add to home screen" : "Use your browser’s Add to Home Screen"}</button>
+        {installPrompt ? (
+          <button className="secondary-button wide" type="button" onClick={onInstall}><Download size={17} /> Add to home screen</button>
+        ) : (
+          <p className="install-note">On iPhone, open the Share sheet and tap Add to Home Screen. On Android, open the browser menu and choose Install app or Add to Home screen.</p>
+        )}
       </section>
 
       <aside className="privacy-card"><ShieldCheck size={19} /><div><b>Privacy by architecture</b><p>Landmark detection and metric calculation run in your browser. Shot summaries only reach Firebase after you sign in.</p></div></aside>
@@ -882,9 +1084,14 @@ export function ShotLabApp() {
   const savingRef = useRef(false);
   const syncChainRef = useRef(Promise.resolve());
   const preserveIdsRef = useRef(new Set<string>());
+  const preserveOwnerRef = useRef<string | null>(null);
   const shotsRevisionRef = useRef(0);
   const claimRef = useRef(new Map<string, Promise<ShotRecord[]>>());
   const claimedOwnerRef = useRef<string | null>(null);
+  const declinedClaimRef = useRef(new Set<string>());
+  const claimChoiceRef = useRef<((accept: boolean) => void) | null>(null);
+  const claimDialogRef = useRef<HTMLDialogElement>(null);
+  const [claimPrompt, setClaimPrompt] = useState<number | null>(null);
 
   const enqueueSync = useCallback((task: () => Promise<void>) => {
     const run = syncChainRef.current.then(task);
@@ -898,10 +1105,10 @@ export function ShotLabApp() {
   const uploadPendingShots = useCallback(async (ownerId: string) => {
     try {
       const ids = await flushPendingShotUploads(ownerId);
-      for (const id of ids) preserveIdsRef.current.add(id);
+      protectShotIds(ids, ownerId, preserveIdsRef.current, preserveOwnerRef);
     } catch (error) {
       if (error instanceof PendingUploadError) {
-        for (const id of error.syncedIds) preserveIdsRef.current.add(id);
+        protectShotIds(error.syncedIds, ownerId, preserveIdsRef.current, preserveOwnerRef);
       }
       throw error;
     }
@@ -920,11 +1127,25 @@ export function ShotLabApp() {
     void enqueueSync(async () => {
       try {
         if (claimedOwnerRef.current !== uid) {
-          preserveIdsRef.current.clear();
+          if (preserveOwnerRef.current !== uid) {
+            preserveIdsRef.current.clear();
+            preserveOwnerRef.current = uid;
+          }
           claimedOwnerRef.current = uid;
         }
-        await reassignLocalOwner("local", uid);
-        shotsRevisionRef.current += 1;
+        const unsigned = await localShotStore.list({ ownerId: "local" });
+        if (unsigned.length > 0 && !declinedClaimRef.current.has(uid)) {
+          const accepted = await new Promise<boolean>((resolve) => {
+            claimChoiceRef.current = resolve;
+            setClaimPrompt(unsigned.length);
+          });
+          if (accepted) {
+            shotsRevisionRef.current += 1;
+            await reassignLocalOwner("local", uid);
+          } else if (claimedOwnerRef.current === uid) {
+            declinedClaimRef.current.add(uid);
+          }
+        }
         resolveList(await localShotStore.list());
       } catch (error) {
         rejectList(error);
@@ -972,9 +1193,20 @@ export function ShotLabApp() {
       setInstallPrompt(event as InstallPromptEvent);
     };
     window.addEventListener("beforeinstallprompt", handleInstallPrompt);
+    const blockFileNavigation = (event: DragEvent) => {
+      const types = event.dataTransfer?.types;
+      if (!types || ![...types].includes("Files")) return;
+      event.preventDefault();
+    };
+    window.addEventListener("dragenter", blockFileNavigation);
+    window.addEventListener("dragover", blockFileNavigation);
+    window.addEventListener("drop", blockFileNavigation);
     return () => {
       window.clearTimeout(localLoad);
       window.removeEventListener("beforeinstallprompt", handleInstallPrompt);
+      window.removeEventListener("dragenter", blockFileNavigation);
+      window.removeEventListener("dragover", blockFileNavigation);
+      window.removeEventListener("drop", blockFileNavigation);
     };
   }, [refreshLocal]);
 
@@ -1024,7 +1256,11 @@ export function ShotLabApp() {
         activeOwner = nextUser?.uid;
         if (!nextUser) {
           claimedOwnerRef.current = null;
-          preserveIdsRef.current.clear();
+          declinedClaimRef.current.clear();
+          const resolveClaim = claimChoiceRef.current;
+          claimChoiceRef.current = null;
+          setClaimPrompt(null);
+          resolveClaim?.(false);
           setUser(null);
           setSelectedHistoryShot(null);
           return;
@@ -1059,8 +1295,10 @@ export function ShotLabApp() {
                   if (canceled || currentGeneration !== generation) return;
                   const keep = [...preserveIdsRef.current];
                   const reconciled = await localShotStore.reconcileCloud(uid, snapshot, { preserveIds: keep });
-                  for (const id of keep) {
-                    if (snapshot.shots.some((shot) => shot.id === id)) preserveIdsRef.current.delete(id);
+                  if (!snapshot.fromCache && !snapshot.hasPendingWrites) {
+                    for (const id of keep) {
+                      if (snapshot.shots.some((shot) => shot.id === id)) preserveIdsRef.current.delete(id);
+                    }
                   }
                   if (canceled || currentGeneration !== generation) return;
                   setShots(reconciled);
@@ -1091,6 +1329,39 @@ export function ShotLabApp() {
     };
   }, [claimLocalShots, enqueueSync, retryCloudDeletions, uploadPendingShots]);
 
+  const finishClaim = useCallback((accept: boolean) => {
+    setClaimPrompt(null);
+    const resolve = claimChoiceRef.current;
+    claimChoiceRef.current = null;
+    resolve?.(accept);
+  }, []);
+
+  useEffect(() => {
+    if (claimPrompt === null) return;
+    const dialog = claimDialogRef.current;
+    if (dialog && !dialog.open) {
+      try {
+        dialog.showModal();
+      } catch {
+        dialog.show();
+      }
+      dialog.querySelector<HTMLElement>(".claim-dialog-actions .secondary-button")?.focus();
+    }
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      finishClaim(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      if (dialog?.open) dialog.close();
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [claimPrompt, finishClaim]);
+
   useEffect(() => {
     if (!notice) return;
     const timeout = window.setTimeout(() => setNotice(null), 5200);
@@ -1117,6 +1388,13 @@ export function ShotLabApp() {
     setScreen(next);
     if (next !== "history") setSelectedHistoryShot(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const cancelAnalysis = () => {
+    analysisAbortRef.current?.abort();
+    setPhase((current) => (current === "running" ? "ready" : current));
+    setProgress(0);
+    setProgressLabel("Loading pose model");
   };
 
   const resetAnalysis = () => {
@@ -1231,9 +1509,11 @@ export function ShotLabApp() {
     const measured = analysis;
     let localVideoId: string | undefined;
     let shotSaved = false;
+    let shotId = "";
     try {
       const timestamp = new Date().toISOString();
-      const shotId = newId("shot");
+      shotId = newId("shot");
+      if (user) protectShotIds([shotId], user.uid, preserveIdsRef.current, preserveOwnerRef);
       const ownerId = user?.uid ?? "local";
       if (settings.keepLocalVideos) {
         const localVideo = await localVideoStore.storeForShot({
@@ -1288,6 +1568,7 @@ export function ShotLabApp() {
       }
       setShots((current) => mergeShots(current, [shot]));
 
+      let followUp: Notice | null = null;
       if (settings.autoUploadVideos && user && !cloudFailed) {
         try {
           const uploaded = await cloudVideoStore.upload({
@@ -1308,20 +1589,28 @@ export function ShotLabApp() {
               uploadedAt: uploaded.uploadedAt,
             },
           });
-          shot = await cloudShotStore.save(shot);
-          await localShotStore.save(shot);
+          try {
+            shot = await cloudShotStore.save(shot);
+            await localShotStore.save(shot);
+            followUp = { tone: "success", text: "Shot saved. The original video is in cloud storage." };
+          } catch {
+            shot = await localShotStore.setSyncState(shotId, "pending");
+            followUp = { tone: "warning", text: "The video uploaded. The cloud record will retry so other devices can find it." };
+          }
           setShots((current) => mergeShots(current, [shot]));
-        } catch {
-          setNotice({ tone: "warning", text: "The shot is saved, but cloud video storage is not enabled yet. Metrics still sync." });
+        } catch (error) {
+          followUp = { tone: "warning", text: videoUploadFailureMessage(error) };
         }
       } else if (cloudFailed) {
-        setNotice({ tone: "warning", text: "Saved on this device. Cloud sync will retry when Firebase is available." });
+        followUp = { tone: "warning", text: "Saved on this device. Cloud sync will retry when Firebase is available." };
       } else {
-        setNotice({ tone: "success", text: user ? "Shot saved and synced." : "Shot saved on this device." });
+        followUp = { tone: "success", text: user ? "Shot saved and synced." : "Shot saved on this device." };
       }
+      if (followUp) setNotice(followUp);
       resetAnalysis();
       navigate("home");
     } catch (error) {
+      if (!shotSaved) preserveIdsRef.current.delete(shotId);
       if (localVideoId && !shotSaved) {
         await localVideoStore.delete(localVideoId).catch(() => {});
       }
@@ -1369,7 +1658,13 @@ export function ShotLabApp() {
             if (revision === shotsRevisionRef.current) setShots(refreshed);
           }
         });
-        setNotice({ tone: "success", text: "Firebase sync is connected." });
+        const unsignedLeft = listed.some((shot) => shot.ownerId === "local");
+        setNotice({
+          tone: "success",
+          text: unsignedLeft
+            ? "Signed in. Unsigned shots stayed on this device."
+            : "Firebase sync is connected.",
+        });
       } catch {
         setNotice({ tone: "warning", text: "Signed in on this device. Some shots will sync when Firebase is available." });
       }
@@ -1382,7 +1677,7 @@ export function ShotLabApp() {
     await firebaseAuth.signOut();
     setUser(null);
     setSelectedHistoryShot(null);
-    setNotice({ tone: "success", text: "Signed out. Existing local shots stay on this device." });
+    setNotice({ tone: "success", text: "Signed out. Account shots show again when you sign in. Unsigned shots stay visible." });
   };
 
   const deleteHistoryShot = async (shot: ShotRecord) => {
@@ -1436,6 +1731,7 @@ export function ShotLabApp() {
           onNotes={setNotes}
           onReleaseFrame={changeReleaseFrame}
           onSave={() => void saveCurrentShot()}
+          onCancel={cancelAnalysis}
         />
       );
     }
@@ -1467,7 +1763,10 @@ export function ShotLabApp() {
         shots={visibleShots}
         user={user}
         onAnalyze={() => navigate("analyze")}
-        onHistory={() => navigate("history")}
+        onHistory={(shot) => {
+          setSelectedHistoryShot(shot ?? null);
+          navigate("history");
+        }}
       />
     );
   })();
@@ -1480,7 +1779,8 @@ export function ShotLabApp() {
         <nav aria-label="Primary navigation">
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
-            return <button key={item.id} className={screen === item.id ? "active" : ""} type="button" onClick={() => navigate(item.id)}><Icon size={19} /> {item.label}</button>;
+            const current = screen === item.id;
+            return <button key={item.id} className={current ? "active" : ""} type="button" aria-current={current ? "page" : undefined} onClick={() => navigate(item.id)}><Icon size={19} /> {item.label}</button>;
           })}
         </nav>
         <div className="sidebar-bottom">
@@ -1506,9 +1806,34 @@ export function ShotLabApp() {
       <nav className="mobile-nav" aria-label="Primary navigation">
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;
-          return <button key={item.id} className={screen === item.id ? "active" : ""} type="button" onClick={() => navigate(item.id)}><Icon size={20} /><span>{item.label}</span></button>;
+          const current = screen === item.id;
+          return <button key={item.id} className={current ? "active" : ""} type="button" aria-current={current ? "page" : undefined} onClick={() => navigate(item.id)}><Icon size={20} /><span>{item.label}</span></button>;
         })}
       </nav>
+
+      {claimPrompt !== null ? (
+        <dialog
+          ref={claimDialogRef}
+          className="claim-dialog"
+          aria-labelledby="claim-title"
+          aria-describedby="claim-description"
+          onCancel={(event) => {
+            event.preventDefault();
+            finishClaim(false);
+          }}
+        >
+          <div className="claim-dialog-card">
+            <h2 id="claim-title">Move shots to this account?</h2>
+            <p id="claim-description">
+              {claimPrompt === 1 ? "1 shot saved on this device is still unsigned." : `${claimPrompt} shots saved on this device are still unsigned.`} Moving them uploads the makes, misses, notes, and file names to the Google account you just opened. Leaving them here keeps that history off the account. Unsigned shots stay hidden while you are signed in, and show again after you sign out.
+            </p>
+            <div className="claim-dialog-actions">
+              <button className="secondary-button" type="button" onClick={() => finishClaim(false)}>Leave on this device</button>
+              <button className="primary-button" type="button" onClick={() => finishClaim(true)}>Move to this account</button>
+            </div>
+          </div>
+        </dialog>
+      ) : null}
 
       {notice ? (
         <div className={`toast ${notice.tone}`} role="status">

@@ -74,6 +74,11 @@ const METRIC_DEFINITIONS: Array<{
   { key: "baseWidthRatio", label: "Base width", unit: "×" },
   { key: "jumpDrift", label: "Forward drift", unit: "×" },
   { key: "releaseTimingSeconds", label: "Release timing", unit: "s" },
+  { key: "hipAngleDeg", label: "Hip angle", unit: "°" },
+  { key: "shoulderTiltDeg", label: "Shoulder tilt", unit: "°" },
+  { key: "landingWidthRatio", label: "Landing width", unit: "×" },
+  { key: "landingDisplacement", label: "Landing drift", unit: "×" },
+  { key: "landingLateralDisplacement", label: "Landing side drift", unit: "×" },
 ];
 
 function visible(point?: PoseLandmark): point is PoseLandmark {

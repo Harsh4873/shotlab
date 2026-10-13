@@ -333,6 +333,13 @@ button:disabled {
   font-weight: 700;
 }
 
+.status-pill.compact {
+  width: 44px;
+  height: 44px;
+  justify-content: center;
+  padding: 0;
+}
+
 .status-pill.is-online {
   border-color: rgba(134, 220, 116, 0.25);
   color: var(--green-ink);
@@ -372,8 +379,11 @@ button:disabled {
 }
 
 .theme-toggle.compact {
+  width: 44px;
+  height: 44px;
+  justify-content: center;
   border-radius: 50%;
-  padding: 8px;
+  padding: 0;
 }
 
 .app-main {
@@ -575,7 +585,7 @@ button:disabled {
 
 .hero-release-card > span {
   color: rgba(255, 255, 255, 0.65);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.18em;
 }
@@ -930,7 +940,7 @@ button:disabled {
 .recent-shot-metric small,
 .history-metric span {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 11px;
   text-transform: uppercase;
 }
 
@@ -1109,6 +1119,16 @@ button:disabled {
   object-fit: contain;
 }
 
+.history-clip {
+  margin: 0 0 16px;
+}
+
+.clip-status {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
 .pose-overlay {
   position: absolute;
   inset: 0;
@@ -1119,8 +1139,9 @@ button:disabled {
 
 .video-stage-label {
   position: absolute;
+  top: 12px;
   right: 12px;
-  bottom: 12px;
+  bottom: auto;
   left: 12px;
   display: flex;
   align-items: center;
@@ -1131,7 +1152,8 @@ button:disabled {
   background: rgba(5, 7, 8, 0.72);
   color: rgba(255, 255, 255, 0.82);
   padding: 8px 10px;
-  font-size: 9px;
+  font-size: 12px;
+  pointer-events: none;
   backdrop-filter: blur(8px);
 }
 
@@ -1215,7 +1237,14 @@ button:disabled {
 .analysis-progress p {
   margin: 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.analysis-progress .text-button {
+  min-height: 44px;
+  margin-top: 12px;
+  padding: 10px 4px;
 }
 
 .inline-error {
@@ -1283,7 +1312,7 @@ button:disabled {
 
 .confidence-ring span {
   color: var(--muted);
-  font-size: 8px;
+  font-size: 11px;
   text-transform: uppercase;
 }
 
@@ -1324,11 +1353,20 @@ button:disabled {
 }
 
 .release-ticks {
-  display: flex;
-  justify-content: space-between;
+  position: relative;
+  min-height: 18px;
   color: var(--muted);
-  font-size: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.release-ticks span {
+  position: absolute;
+  top: 0;
+  line-height: 16px;
+  white-space: nowrap;
 }
 
 .metric-grid {
@@ -1338,6 +1376,7 @@ button:disabled {
 }
 
 .metric-card {
+  min-width: 0;
   min-height: 128px;
   border: 1px solid var(--line);
   border-radius: 15px;
@@ -1348,8 +1387,9 @@ button:disabled {
 .metric-card p {
   margin: 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 750;
+  overflow-wrap: anywhere;
   text-transform: uppercase;
 }
 
@@ -1364,7 +1404,7 @@ button:disabled {
 
 .metric-card span {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .empty-metric {
@@ -1381,7 +1421,7 @@ button:disabled {
 
 .comparison-row {
   display: grid;
-  grid-template-columns: 1fr 110px 110px;
+  grid-template-columns: minmax(0, 1fr) 110px 110px;
   gap: 12px;
   align-items: center;
   border-top: 1px solid var(--line);
@@ -1390,10 +1430,19 @@ button:disabled {
   font-size: 11px;
 }
 
+.comparison-row > :first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.comparison-row > :not(:first-child) {
+  white-space: nowrap;
+}
+
 .comparison-row.header {
   border-top: 0;
   color: var(--paper-4);
-  font-size: 8px;
+  font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
 }
@@ -1408,6 +1457,68 @@ button:disabled {
   color: var(--muted);
   padding: 20px 0 4px;
   font-size: 12px;
+}
+
+.install-note {
+  margin: 0;
+  color: var(--paper);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.claim-dialog {
+  width: min(440px, calc(100vw - 28px));
+  max-height: calc(100dvh - 28px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  margin: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--paper);
+}
+
+.claim-dialog::backdrop {
+  background: rgba(8, 10, 12, 0.72);
+}
+
+.claim-dialog-card {
+  width: 100%;
+  max-height: calc(100dvh - 28px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 22px;
+  overflow: auto;
+}
+
+.claim-dialog-card h2 {
+  margin: 0 0 8px;
+  font-size: 22px;
+}
+
+.claim-dialog-card p {
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.claim-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+@media (max-width: 520px) {
+  .claim-dialog-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .claim-dialog-actions button {
+    width: 100%;
+  }
 }
 
 .accuracy-note,
@@ -1582,7 +1693,7 @@ button:disabled {
 
 .history-row > div:nth-child(2) > small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .outcome-summary {
@@ -1663,7 +1774,7 @@ button:disabled {
 
 .detail-meta span {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 11px;
   text-transform: uppercase;
 }
 
@@ -1946,7 +2057,7 @@ button:disabled {
     border: 0;
     background: transparent;
     color: var(--muted);
-    font-size: 9px;
+    font-size: 12px;
     font-weight: 700;
   }
 
@@ -1991,7 +2102,7 @@ button:disabled {
   }
 
   .hero-card {
-    min-height: 540px;
+    min-height: 0;
     display: block;
     padding: 31px 23px;
   }
@@ -2006,27 +2117,21 @@ button:disabled {
   }
 
   /*
-   * Narrow-screen hero decoration must stay inside the viewport.
-   *
-   * Both of these are rotated, so their layout box is not their painted box: a
-   * rotated element's bounding rect grows by height*sin(angle) horizontally.
-   * Previously .hero-release-card sat at right:-18px and .hero-court-lines at
-   * right:-8% with a 14deg tilt over a full-bleed height, which pushed their
-   * rects to ~397px and ~476px against a 390px viewport. The card's
-   * overflow:hidden clipped the paint, but the geometry still escaped.
-   *
-   * So: keep both inside the hero's padding box, and give .hero-court-lines a
-   * fixed height instead of a percentage inset, so the rotation's horizontal
-   * contribution is bounded rather than growing with the hero.
+   * The court decoration is rotated, so its layout box is not its painted box.
+   * Keep a fixed height and a positive inset so the rotation stays inside the
+   * viewport. The release card stays in normal flow under the copy: pinning it
+   * to the bottom covered the button once the headline wrapped.
    */
   .hero-release-card {
-    position: absolute;
-    right: 6px;
-    bottom: -40px;
+    position: relative;
+    right: auto;
+    bottom: auto;
     width: 192px;
-    height: 220px;
-    opacity: 0.72;
-    transform: rotate(-4deg);
+    max-width: 100%;
+    height: 180px;
+    margin-top: 28px;
+    opacity: 1;
+    transform: none;
   }
 
   .hero-court-lines {
@@ -2073,7 +2178,7 @@ button:disabled {
   }
 
   .recent-shot-time {
-    font-size: 9px;
+    font-size: 12px;
   }
 
   .empty-state {
@@ -2144,9 +2249,9 @@ button:disabled {
   }
 
   .comparison-row {
-    grid-template-columns: 1fr 72px 72px;
+    grid-template-columns: minmax(0, 1fr) 84px 84px;
     gap: 7px;
-    font-size: 10px;
+    font-size: 12px;
   }
 
   .save-shot-panel {
@@ -2222,7 +2327,7 @@ button:disabled {
 
 @media (max-width: 390px) {
   .hero-card {
-    min-height: 580px;
+    min-height: 0;
   }
 
   .hero-copy h1 {

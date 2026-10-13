@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "shotlab-";
-const CACHE_VERSION = `${CACHE_PREFIX}shell-v2`;
+const CACHE_VERSION = `${CACHE_PREFIX}shell-v3`;
 const APP_ROOT = self.registration.scope;
 const scopedUrl = (path = "") => new URL(path, APP_ROOT).href;
 const CORE_ASSETS = [
@@ -7,8 +7,8 @@ const CORE_ASSETS = [
   scopedUrl("manifest.webmanifest"),
   scopedUrl("icons/icon-192.png"),
   scopedUrl("icons/icon-512.png"),
-  scopedUrl("models/pose_landmarker_lite.task"),
 ];
+const MODEL_URL = scopedUrl("models/pose_landmarker_lite.task");
 
 const SCOPED_PATHS = {
   api: new URL("api/", APP_ROOT).pathname,
@@ -20,7 +20,11 @@ const SCOPED_PATHS = {
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) => cache.addAll(CORE_ASSETS)).then(() => self.skipWaiting()),
+    caches.open(CACHE_VERSION).then(async (cache) => {
+      await cache.addAll(CORE_ASSETS);
+      await cache.add(MODEL_URL).catch(() => undefined);
+      await self.skipWaiting();
+    }),
   );
 });
 

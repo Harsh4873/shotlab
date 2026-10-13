@@ -1,4 +1,4 @@
-import { cloudShotStore, cloudVideoStore } from "./firebase";
+import { FirebasePermanentAccountRequiredError, cloudShotStore, cloudVideoStore } from "./firebase";
 import {
   acknowledgeShotDeletion,
   listPendingShotDeletions,
@@ -6,6 +6,38 @@ import {
   saveShot,
 } from "./local-db";
 import type { ShotRecord } from "./types";
+
+function isStorageObjectMissing(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    error.code === "storage/object-not-found",
+  );
+}
+
+export function videoUploadFailureMessage(error: unknown): string {
+  if (error instanceof FirebasePermanentAccountRequiredError) {
+    return "The shot is saved. Cloud video upload needs the Google account you signed in with.";
+  }
+  if (error instanceof RangeError) {
+    return "The shot is saved, but this clip is over the 500 MB upload limit. Metrics still sync.";
+  }
+  const code = error && typeof error === "object" && "code" in error && typeof error.code === "string"
+    ? error.code
+    : "";
+  const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+  if (
+    offline ||
+    code === "storage/retry-limit-exceeded" ||
+    code === "storage/canceled" ||
+    code === "auth/network-request-failed" ||
+    code === "unavailable"
+  ) {
+    return "The shot is saved. The video upload stopped because the network failed. Metrics still sync.";
+  }
+  return "The shot is saved, but the original video did not upload. Metrics still sync.";
+}
 
 export class PendingUploadError extends Error {
   readonly syncedIds: readonly string[];
@@ -28,7 +60,11 @@ export async function flushShotDeletions(
     for (const deletion of pending) {
       await removeShot(deletion.id, ownerId);
       if (deletion.storagePath) {
-        await removeVideo(deletion.storagePath);
+        try {
+          await removeVideo(deletion.storagePath);
+        } catch (error) {
+          if (!isStorageObjectMissing(error)) throw error;
+        }
       }
       await acknowledgeShotDeletion(deletion.id);
     }
